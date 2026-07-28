@@ -1,0 +1,21 @@
+{
+  "name": "instruct-protocol",
+  "version": "0.1.0",
+  "description": "Privacy-preserving dual execution protocol for model-directed workflows and sandboxed code",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": "./dist/index.js", "./schemas": "./dist/schemas.js" },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:live": "vitest --reporter=verbose",
+    "test:performance": "vitest run test/performance.test.ts --reporter=verbose",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "wasmoon": "^1.16.0" },
+  "devDependencies": { "@types/node": "^22.10.0", "typescript": "^5.7.2", "vitest": "^2.1.8" },
+  "engines": { "node": ">=20" },
+  "license": "Apache-2.0"
+}

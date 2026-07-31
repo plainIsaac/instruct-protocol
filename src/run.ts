@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { ExecutionResult, Grant, GuardedValue, InstructionCapsule, JsonValue } from "./types.js";
 import type { IntentResolver } from "./normalize.js";
 import type { ToolRegistry } from "./tools.js";
@@ -8,15 +7,17 @@ import { executeProgram } from "./program.js";
 import { createReceipt } from "./receipt.js";
 import { remoteRepresentation } from "./guarded.js";
 import { emptyMetrics, EventRecorder, round, type ProtocolObserver } from "./observability.js";
+import { protocolHash } from "./canonical.js";
+import { validateInstructionCapsule } from "./schemas.js";
 
 export interface RunOptions { grant: Grant; tools: ToolRegistry; resolver?: IntentResolver; simulate?: boolean; signal?: AbortSignal; observer?: ProtocolObserver }
-const hash = (x: unknown) => createHash("sha256").update(JSON.stringify(x)).digest("hex");
-
 export async function run(capsule: InstructionCapsule, options: RunOptions): Promise<ExecutionResult> {
   const metrics = emptyMetrics(); const recorder = new EventRecorder(options.observer); recorder.emit("run.started", undefined, { capsuleId: capsule.id, kind: capsule.kind });
+  const capsuleErrors = validateInstructionCapsule(capsule);
+  if (capsuleErrors.length) throw new Error(`INVALID_CAPSULE:${capsuleErrors.join(";")}`);
   if (capsule.version !== "0.1") throw new Error("UNSUPPORTED_PROTOCOL_VERSION");
   if (capsule.capabilities.some(c => !options.grant.capabilities.includes(c))) throw new Error("CAPSULE_CAPABILITY_DENIED");
-  const instructionHash = hash(capsule);
+  const instructionHash = protocolHash(capsule);
   if (capsule.kind === "orchestration") {
     const normalizationStarted = performance.now(); recorder.emit("workflow.normalization.started");
     const normalized = await normalizeWorkflow(capsule.workflow, { tools: options.tools, capabilities: capsule.capabilities, effects: capsule.effects, resolver: options.resolver });

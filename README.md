@@ -13,6 +13,8 @@ Frontier-generated workflows and programs are hostile input. A workflow proposal
 
 This is a v0.1 reference prototype, not a production sandbox. WASM isolates the Lua VM from the TypeScript host, while OS process isolation, attestation, hardened key storage, and independently audited policy implementations remain future work.
 
+The current implementation now uses deterministic canonical JSON for protocol and receipt SHA-256 digests, validates untrusted capsule and guard structure at the public boundary, and includes required-rejection conformance tests. See `SECURITY.md` for the deployment controls and release gates that remain outside the library.
+
 ## Install and verify
 
 ```sh

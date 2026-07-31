@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { CanonicalWorkflow, CodeProgram, ConditionExpression, Effect, RetryPolicy, ValueExpression, WorkflowNode, WorkflowProposal } from "./types.js";
 import type { ToolRegistry } from "./tools.js";
+import { canonicalJson, protocolHash } from "./canonical.js";
 
 export interface NormalizationDecision { path: string; from: unknown; to: unknown; reason: string }
 export interface NormalizationContext { tools: ToolRegistry; capabilities: string[]; effects: Effect[]; resolver?: IntentResolver }
@@ -10,7 +10,6 @@ export interface IntentResolver {
 }
 export interface NormalizationResult { graph: CanonicalWorkflow; decisions: NormalizationDecision[]; proposalHash: string; canonicalHash: string }
 
-const hash = (x: unknown) => createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const id = (raw: Record<string, unknown>, index: number) => String(raw.id ?? raw.name ?? `step_${index + 1}`);
 const argsOf = (raw: Record<string, unknown>) => (raw.arguments ?? raw.args ?? raw.with ?? {}) as Record<string, ValueExpression>;
 
@@ -39,7 +38,7 @@ export async function normalizeWorkflow(proposal: WorkflowProposal, context: Nor
       if (!tool) throw new Error(`UNKNOWN_TOOL:${requested}`);
       if (tool !== requested) decisions.push({ path: `${nodeId}.tool`, from: requested, to: tool, reason: "local tool-name resolution" });
       const normalizedArgs = await resolver.normalizeArguments(tool, argsOf(raw));
-      if (JSON.stringify(normalizedArgs) !== JSON.stringify(argsOf(raw))) decisions.push({ path: `${nodeId}.arguments`, from: argsOf(raw), to: normalizedArgs, reason: "local argument normalization" });
+      if (canonicalJson(normalizedArgs) !== canonicalJson(argsOf(raw))) decisions.push({ path: `${nodeId}.arguments`, from: argsOf(raw), to: normalizedArgs, reason: "local argument normalization" });
       nodes[nodeId] = { id: nodeId, kind: "tool", tool, arguments: normalizedArgs, assign: raw.assign == null ? undefined : String(raw.assign), next, retry };
     } else if (kind === "code") {
       const programRaw = raw.program as Record<string, unknown> | string;
@@ -59,7 +58,7 @@ export async function normalizeWorkflow(proposal: WorkflowProposal, context: Nor
   }
   const entry = proposal.entry ?? Object.keys(nodes)[0]!;
   const graph: CanonicalWorkflow = { version: "0.1", entry, nodes, declaredCapabilities: [...context.capabilities], declaredEffects: structuredClone(context.effects) };
-  return { graph, decisions, proposalHash: hash(proposal), canonicalHash: hash(graph) };
+  return { graph, decisions, proposalHash: protocolHash(proposal), canonicalHash: protocolHash(graph) };
 }
 
 function normalizeRetry(raw: unknown): RetryPolicy | undefined {

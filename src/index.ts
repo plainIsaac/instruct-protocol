@@ -11,3 +11,4 @@ export * from "./receipt.js";
 export * from "./run.js";
 export * from "./observability.js";
 export * from "./confidential-retrieval.js";
+export * from "./canonical.js";

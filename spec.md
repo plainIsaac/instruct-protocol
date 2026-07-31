@@ -290,6 +290,23 @@ Receipt integrity MUST cover every field whose alteration would change the meani
 of the receipt. Hashing requires a specified canonical serialization; ordinary
 runtime object serialization is not sufficient for interoperable receipts.
 
+#### 2.9.1 Version 0.1 canonical JSON and digests
+
+Version 0.1 digests use UTF-8 encoded canonical JSON and SHA-256. The canonical
+encoder accepts JSON nulls, booleans, strings, finite numbers, arrays, and objects.
+Object member names are sorted in ascending Unicode code-point order. Undefined
+object members are omitted, matching JSON object serialization. Undefined array
+members, non-finite numbers, cycles, functions, symbols, big integers, and other
+non-JSON values MUST be rejected. Negative zero is encoded as `0`. No insignificant
+whitespace is emitted.
+
+Instruction, resolved-program, receipt, and receipt-chain digests MUST use this
+encoding. Receipt verification MUST reconstruct the receipt body without its
+`receiptHash` member and compare the lowercase hexadecimal SHA-256 digest in
+constant semantic form. This profile fixes deterministic encoding for the v0.1
+reference implementation; a future interoperable version may adopt a published
+canonicalization standard through explicit version negotiation.
+
 An implementation MUST distinguish at least:
 
 - **denied**: validation or authorization prevented execution;
@@ -644,7 +661,6 @@ compensation, cancellation, and budget exhaustion.
 
 The following matters remain intentionally unsettled in this draft:
 
-- canonical wire encoding and digest algorithm;
 - a complete schema for capsules, guards, Toolring programs, events, and receipts;
 - lexical rules for names, capabilities, effects, and extensions;
 - precise scope and correlation semantics for handles and pseudonyms;

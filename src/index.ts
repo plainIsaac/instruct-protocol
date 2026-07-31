@@ -10,3 +10,4 @@ export * from "./workflow.js";
 export * from "./receipt.js";
 export * from "./run.js";
 export * from "./observability.js";
+export * from "./confidential-retrieval.js";

@@ -12,6 +12,8 @@
     "test": "vitest run",
     "test:live": "vitest --reporter=verbose",
     "test:performance": "vitest run test/performance.test.ts --reporter=verbose",
+    "bench:live": "pnpm build && node scripts/live-confidential-benchmark.mjs",
+    "bench:warning": "pnpm build && node scripts/live-warning-baseline.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": { "wasmoon": "^1.16.0" },

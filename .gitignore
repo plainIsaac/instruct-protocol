@@ -2,5 +2,8 @@ node_modules/
 dist/
 coverage/
 benchmark-results/
+.env
+.env.*
+!.env.example
 *.log
-".pnpm-store/" 
+.pnpm-store/

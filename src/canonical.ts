@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
 
 /**
- * Deterministic JSON encoding used by protocol digests and receipt integrity.
- * Object keys are sorted by Unicode code point. Undefined object members are
- * omitted to match JSON object semantics; unsupported values elsewhere fail closed.
+ * Deterministic JSON encoding used by this TypeScript reference implementation.
+ * This is an implementation profile, not a mandatory protocol wire format.
  */
 export function canonicalJson(value: unknown): string {
   return encode(value, new Set<object>(), "$");
 }
 
-export function protocolHash(value: unknown): string {
+export function referenceDigest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
@@ -27,8 +26,12 @@ function encode(value: unknown, seen: Set<object>, path: string): string {
     if (Array.isArray(value)) {
       return `[${value.map((item, index) => encode(item, seen, `${path}[${index}]`)).join(",")}]`;
     }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`CANONICAL_UNSUPPORTED_OBJECT:${path}`);
+    }
     const object = value as Record<string, unknown>;
-    const entries = Object.keys(object).filter(key => object[key] !== undefined).sort().map(key => {
+    const entries = Object.keys(object).filter(key => object[key] !== undefined).sort(compareCodePoints).map(key => {
       const child = object[key];
       return `${JSON.stringify(key)}:${encode(child, seen, `${path}.${key}`)}`;
     });
@@ -36,4 +39,13 @@ function encode(value: unknown, seen: Set<object>, path: string): string {
   } finally {
     seen.delete(value);
   }
+}
+
+function compareCodePoints(left: string, right: string): number {
+  const a = Array.from(left, character => character.codePointAt(0)!);
+  const b = Array.from(right, character => character.codePointAt(0)!);
+  for (let index = 0; index < Math.min(a.length, b.length); index++) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!;
+  }
+  return a.length - b.length;
 }

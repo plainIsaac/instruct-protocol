@@ -12,3 +12,5 @@ export * from "./run.js";
 export * from "./observability.js";
 export * from "./confidential-retrieval.js";
 export * from "./canonical.js";
+export * from "./integrity.js";
+export * from "./process-tool.js";

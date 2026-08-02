@@ -124,6 +124,7 @@ export interface ExecutionMetrics {
 export interface ExecutionReceipt {
   version: "0.1"; instructionHash: string; canonicalHash?: string; previousHash: string;
   receiptHash: string; status: "completed" | "failed" | "denied"; events: ExecutionEvent[]; metrics: ExecutionMetrics;
-  remoteResult: unknown; observedEffects: Effect[];
+  remoteResult: unknown; observedEffects: Effect[]; integrity?: ReceiptIntegrity;
 }
+export interface ReceiptIntegrity { profile: string; keyId: string; signature: string }
 export interface ExecutionResult { localResult: Record<string, GuardedValue>; receipt: ExecutionReceipt }

@@ -1,6 +1,6 @@
 import type { CanonicalWorkflow, CodeProgram, ConditionExpression, Effect, RetryPolicy, ValueExpression, WorkflowNode, WorkflowProposal } from "./types.js";
 import type { ToolRegistry } from "./tools.js";
-import { canonicalJson, protocolHash } from "./canonical.js";
+import { canonicalJson, referenceDigest } from "./canonical.js";
 
 export interface NormalizationDecision { path: string; from: unknown; to: unknown; reason: string }
 export interface NormalizationContext { tools: ToolRegistry; capabilities: string[]; effects: Effect[]; resolver?: IntentResolver }
@@ -58,7 +58,7 @@ export async function normalizeWorkflow(proposal: WorkflowProposal, context: Nor
   }
   const entry = proposal.entry ?? Object.keys(nodes)[0]!;
   const graph: CanonicalWorkflow = { version: "0.1", entry, nodes, declaredCapabilities: [...context.capabilities], declaredEffects: structuredClone(context.effects) };
-  return { graph, decisions, proposalHash: protocolHash(proposal), canonicalHash: protocolHash(graph) };
+  return { graph, decisions, proposalHash: referenceDigest(proposal), canonicalHash: referenceDigest(graph) };
 }
 
 function normalizeRetry(raw: unknown): RetryPolicy | undefined {

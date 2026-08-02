@@ -7,8 +7,8 @@ export function validateSchema(value: unknown, schema?: JsonSchema, path = "$"):
   if (types.length && !types.includes(actual) && !(actual === "integer" && types.includes("number"))) return [`${path}: expected ${types.join("|")}, got ${actual}`];
   if (actual === "object" && value) {
     const object = value as Record<string, unknown>; const errors: string[] = [];
-    for (const key of schema.required ?? []) if (!(key in object)) errors.push(`${path}.${key}: required`);
-    for (const [key, child] of Object.entries(schema.properties ?? {})) if (key in object) errors.push(...validateSchema(object[key], child, `${path}.${key}`));
+    for (const key of schema.required ?? []) if (!Object.hasOwn(object, key)) errors.push(`${path}.${key}: required`);
+    for (const [key, child] of Object.entries(schema.properties ?? {})) if (Object.hasOwn(object, key)) errors.push(...validateSchema(object[key], child, `${path}.${key}`));
     if (schema.additionalProperties === false) for (const key of Object.keys(object)) if (!schema.properties?.[key]) errors.push(`${path}.${key}: additional property`);
     return errors;
   }

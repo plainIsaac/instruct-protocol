@@ -10,10 +10,21 @@ but the host process and every registered tool remain trusted computing base.
 - guarded-value propagation and fail-closed remote representation;
 - scoped, expiring opaque handles;
 - finite workflow, Lua, tool-call, output, and call-depth budgets;
-- allowlisted observer/event details and tamper-evident receipts;
-- deterministic SHA-256 digests over canonical JSON;
-- structural validation of untrusted instruction capsules; and
-- positive and required-rejection conformance tests.
+- allowlisted observer/event details and deterministic receipt digests;
+- deterministic SHA-256 digests in the TypeScript reference profile;
+- security-relevant structural validation of untrusted capsules, guards, effects,
+  handles, transformations, programs, and budgets;
+- stored handle expiry, metadata validation, and single-use replay prevention;
+- fail-closed tool output and receipt verification; and
+- pluggable authenticated receipts with an Ed25519 reference profile;
+- enforced process boundaries for effectful tools in production mode;
+- sanitized audit streaming and security alert hooks; and
+- positive, required-rejection, and adversarial boundary tests.
+
+The reference receipt digest detects accidental corruption and supports deterministic
+chaining. Production mode additionally requires an independently versioned receipt
+signer. The included Ed25519 adapter consumes a deployment-provided key and does not
+load or store signing material itself.
 
 ## Required deployment controls
 
@@ -34,11 +45,28 @@ A production profile MUST add controls outside this package:
 7. Operate an incident response path for policy denial spikes, integrity failures,
    sandbox escapes, and suspected disclosure.
 
+## Deployment acceptance checklist
+
+Before exposing a deployment to hostile instructions, its owner MUST document and
+test all of the following:
+
+- the exact runtime, WASM artifact, tool definitions, policy bundle, and integrity
+  profile are pinned and authenticated;
+- the host and effectful tools run in separately constrained OS identities;
+- every effectful tool honors cancellation or is terminated by its process boundary;
+- receipt authenticity is provided by a managed signing or MAC key;
+- audit output is sanitized and written outside the execution identity;
+- resource limits are enforced by both the library and the operating environment;
+- recovery, rollback, key rotation, and incident-response procedures are exercised;
+  and
+- `pnpm check`, `pnpm test:security`, and a production dependency audit pass for
+  the exact release artifact.
+
 ## Release gates
 
 The project must not claim production readiness until all of these are complete:
 
-- the remaining open protocol semantics in `spec.md` are resolved and versioned;
+- the remaining open protocol semantics in `spec.md` and `TOOLRING.md` are resolved and versioned;
 - normative schemas cover capsules, guards, Toolring, events, and receipts;
 - cross-implementation conformance vectors pass;
 - fuzzing covers parsers, normalization, expressions, receipt decoding, and Lua;

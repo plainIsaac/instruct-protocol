@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ToolRegistry, canonicalJson, createReceipt, defaultGuard, guarded,
-  protocolHash, run, validateInstructionCapsule, verifyReceipt,
+  referenceDigest, run, validateInstructionCapsule, verifyReceipt,
   type CodeCapsule, type ExecutionMetrics, type Grant
 } from "../src/index.js";
 
@@ -28,16 +28,20 @@ function capsule(): CodeCapsule {
   };
 }
 
-describe("canonical protocol encoding", () => {
+describe("reference implementation digest encoding", () => {
   it("produces the same digest regardless of object insertion order", () => {
     expect(canonicalJson({ z: 1, a: { y: 2, x: 3 } })).toBe('{"a":{"x":3,"y":2},"z":1}');
-    expect(protocolHash({ b: 2, a: 1 })).toBe(protocolHash({ a: 1, b: 2 }));
+    expect(referenceDigest({ b: 2, a: 1 })).toBe(referenceDigest({ a: 1, b: 2 }));
+    expect(canonicalJson({ "\uE000": 1, "\u{10000}": 2 }))
+      .toBe('{"\uE000":1,"𐀀":2}');
   });
 
   it("fails closed for values JSON would silently alter", () => {
     expect(canonicalJson({ present: true, missing: undefined })).toBe('{"present":true}');
     expect(() => canonicalJson([undefined])).toThrow("CANONICAL_UNSUPPORTED_VALUE");
     expect(() => canonicalJson({ invalid: Number.NaN })).toThrow("CANONICAL_NON_FINITE_NUMBER");
+    expect(() => canonicalJson(new Date(0))).toThrow("CANONICAL_UNSUPPORTED_OBJECT");
+    expect(() => canonicalJson(new Map())).toThrow("CANONICAL_UNSUPPORTED_OBJECT");
     const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
     expect(() => canonicalJson(cyclic)).toThrow("CANONICAL_CYCLE");
   });
@@ -83,5 +87,13 @@ describe("capsule boundary validation", () => {
       "$.capabilities: duplicate values",
       "$.disclosureBudget.maxRemoteBytes: expected non-negative integer"
     ]));
+  });
+
+  it("rejects an invalid value before notifying observers", async () => {
+    let observed = false;
+    const observer = { onEvent() { observed = true; } };
+    await expect(run(null as unknown as CodeCapsule, { tools: new ToolRegistry(), grant, observer }))
+      .rejects.toThrow("INVALID_CAPSULE");
+    expect(observed).toBe(false);
   });
 });

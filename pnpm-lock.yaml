@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       wasmoon:
-        specifier: ^1.16.0
+        specifier: 1.16.0
         version: 1.16.0
     devDependencies:
       '@types/node':

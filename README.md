@@ -7,21 +7,37 @@ Instruct is an experimental model-context protocol for running frontier-model in
 
 Both paths use capability grants, declared effects, bounded execution, guarded values, local-only handles, and tamper-evident remote-safe receipts.
 
+The protocols have separate specifications: [Instruct Core and Instruct Lua](./spec.md)
+and the independently usable [Toolring protocol](./TOOLRING.md).
+
 ## Security boundary
 
 Frontier-generated workflows and programs are hostile input. A workflow proposal is never executable: it must first be normalized, statically analyzed, and authorized. Local intent resolution may repair names or arguments, but cannot add a capability or effect. Lua receives no filesystem, network, package loader, clock, or process APIs. The local policy engine—not a local model—is authoritative.
 
 This is a v0.1 reference prototype, not a production sandbox. WASM isolates the Lua VM from the TypeScript host, while OS process isolation, attestation, hardened key storage, and independently audited policy implementations remain future work.
 
-The current implementation now uses deterministic canonical JSON for protocol and receipt SHA-256 digests, validates untrusted capsule and guard structure at the public boundary, and includes required-rejection conformance tests. See `SECURITY.md` for the deployment controls and release gates that remain outside the library.
+The TypeScript reference implementation uses deterministic JSON and SHA-256 for
+its local instruction and receipt digests. These are implementation choices, not
+mandatory Instruct or Toolring wire formats. The protocol treats map member order
+as non-semantic and permits independently specified serialization and integrity
+profiles. The public API also performs partial structural validation of untrusted
+capsules and guards. See `SECURITY.md` for remaining schema work, deployment
+controls, and release gates.
 
 ## Install and verify
 
 ```sh
 pnpm install
-pnpm test
-pnpm build
+pnpm check
+pnpm test:security
 ```
+
+The library includes hardened application boundaries, but production readiness is
+a property of a specific deployment. In particular, effectful tools need OS-level
+isolation and enforceable cancellation, and receipts need a deployment-selected
+signature or MAC profile when authenticity is required. See `SECURITY.md` for the
+acceptance checklist and external release gates, and `PRODUCTION.md` for the
+enforced reference production profile.
 
 The primary API is `run(capsule, options)`. Lower-level entry points include `normalizeWorkflow`, `analyzeWorkflow`, `executeWorkflow`, `analyzeProgram`, and `executeProgram`. See `examples/private-workflow.ts` for an orchestration graph containing a sandboxed code node.
 

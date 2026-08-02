@@ -4,25 +4,32 @@ import { analyzeWorkflow } from "./analyze.js";
 import { defaultGuard, guarded, mergeGuards, remoteRepresentation } from "./guarded.js";
 import { executeProgram } from "./program.js";
 import { validateSchema } from "./schema.js";
-import { createReceipt } from "./receipt.js";
+import { validateGuardedValue } from "./schemas.js";
+import { createReceipt, signReceipt, type ReceiptSigner } from "./receipt.js";
 import { emptyMetrics, EventRecorder, round, type ProtocolObserver } from "./observability.js";
 
-export interface WorkflowRuntime { tools: ToolRegistry; grant: Grant; inputs: Record<string, GuardedValue>; signal?: AbortSignal; simulate?: boolean; instructionHash?: string; canonicalHash?: string; disclosureBudget?: { maxRemoteBytes: number; allowedLabels: string[] }; observer?: ProtocolObserver; recorder?: EventRecorder; metrics?: ExecutionMetrics }
+export interface WorkflowRuntime { tools: ToolRegistry; grant: Grant; inputs: Record<string, GuardedValue>; signal?: AbortSignal; simulate?: boolean; instructionHash?: string; canonicalHash?: string; disclosureBudget?: { maxRemoteBytes: number; allowedLabels: string[] }; observer?: ProtocolObserver; recorder?: EventRecorder; metrics?: ExecutionMetrics; receiptSigner?: ReceiptSigner }
 
 export async function executeWorkflow(graph: CanonicalWorkflow, runtime: WorkflowRuntime): Promise<ExecutionResult> {
   const metrics = runtime.metrics ?? emptyMetrics(); const recorder = runtime.recorder ?? new EventRecorder(runtime.observer); recorder.emit("workflow.analysis.started");
   const analysisStarted = performance.now(); const analysis = analyzeWorkflow(graph, runtime.grant, runtime.tools); metrics.analysisDurationMs += round(performance.now() - analysisStarted);
   recorder.emit("workflow.analysis.completed", undefined, { valid: analysis.valid, issueCount: analysis.issues.length }, metrics.analysisDurationMs);
   if (!analysis.valid) { metrics.failures++; recorder.emit("workflow.denied", undefined, { codes: analysis.issues.filter(i => i.severity === "error").map(i => i.code) }); throw new Error(`WORKFLOW_DENIED:${analysis.issues.filter(i => i.severity === "error").map(i => i.code).join(",")}`); }
-  const executionStarted = performance.now(); const variables: Record<string, GuardedValue> = { ...runtime.inputs }; const effects: Effect[] = []; let calls = 0; let depth = 0;
+  const executionStarted = performance.now(); const deadline = executionStarted + runtime.grant.budget.maxDurationMs; const variables: Record<string, GuardedValue> = { ...runtime.inputs }; const effects: Effect[] = []; let calls = 0; let depth = 0; let steps = 0;
   const event = (type: string, nodeId?: string, detail: Record<string, JsonValue> = {}, durationMs?: number) => recorder.emit(type, nodeId, detail, durationMs);
-  const toolContext = (): ToolContext => ({ signal: runtime.signal, simulate: runtime.simulate ?? false, variables });
+  const toolContext = (): ToolContext => {
+    const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(deadline - performance.now())));
+    const signal = runtime.signal ? AbortSignal.any([runtime.signal, timeoutSignal]) : timeoutSignal;
+    return { signal, simulate: runtime.simulate ?? false, variables: Object.freeze({ ...variables }) };
+  };
 
   const runPath = async (start: string, stop?: string): Promise<Record<string, GuardedValue> | undefined> => {
     if (++depth > runtime.grant.budget.maxCallDepth) throw new Error("CALL_DEPTH_EXCEEDED"); metrics.peakCallDepth = Math.max(metrics.peakCallDepth, depth);
     let cursor: string | undefined = start;
     try {
       while (cursor && cursor !== stop) {
+        if (++steps > runtime.grant.budget.maxInstructions) throw new Error("WORKFLOW_INSTRUCTION_BUDGET_EXCEEDED");
+        if (performance.now() > deadline) throw new Error("WORKFLOW_TIMEOUT");
         if (runtime.signal?.aborted) throw new Error("EXECUTION_ABORTED");
         const node: WorkflowNode | undefined = graph.nodes[cursor]; if (!node) throw new Error(`MISSING_NODE:${cursor}`); metrics.nodeCount++; event("node.started", node.id, { kind: node.kind });
         if (node.kind === "terminal") {
@@ -61,7 +68,11 @@ export async function executeWorkflow(graph: CanonicalWorkflow, runtime: Workflo
           const tool = runtime.tools.get(node.tool)!; const args = Object.fromEntries(Object.entries(node.arguments).map(([k, v]) => [k, evaluate(v, variables)]));
           const plain = Object.fromEntries(Object.entries(args).map(([k, v]) => [k, v.value])); const schemaErrors = validateSchema(plain, tool.inputSchema);
           if (schemaErrors.length) throw new Error(`TOOL_SCHEMA_INVALID:${schemaErrors.join(";")}`);
-          output = runtime.simulate && tool.simulate ? await tool.simulate(args, toolContext()) : await tool.execute(args, toolContext()); effects.push(...tool.effects); event("tool.completed", node.id, { tool: node.tool, attempt }, performance.now() - toolStarted);
+          const operation = runtime.simulate && tool.simulate ? tool.simulate(args, toolContext()) : tool.execute(args, toolContext());
+          output = await beforeDeadline(operation, deadline);
+          const outputErrors = validateGuardedValue(output); if (outputErrors.length) throw new Error(`TOOL_OUTPUT_INVALID:${outputErrors.join(";")}`);
+          const outputSchemaErrors = validateSchema(output.value, tool.outputSchema); if (outputSchemaErrors.length) throw new Error(`TOOL_OUTPUT_SCHEMA_INVALID:${outputSchemaErrors.join(";")}`);
+          effects.push(...tool.effects); event("tool.completed", node.id, { tool: node.tool, attempt }, performance.now() - toolStarted);
         } else {
           const childCaps = ["code:execute", ...node.capabilities]; if (childCaps.some(c => !runtime.grant.capabilities.includes(c))) throw new Error("CODE_CAPABILITY_ESCALATION");
           const inputs = Object.fromEntries(Object.entries(node.inputs).map(([k, v]) => [k, evaluate(v, variables)]));
@@ -78,11 +89,14 @@ export async function executeWorkflow(graph: CanonicalWorkflow, runtime: Workflo
   try { localResult = (await runPath(graph.entry)) ?? {}; } catch (error) { status = "failed"; event("workflow.failed", undefined, { code: sanitizeError(error) }); }
   metrics.executionDurationMs += round(performance.now() - executionStarted);
   let remoteResult: Record<string, JsonValue> = Object.fromEntries(Object.entries(localResult).map(([k, v]) => [safeName(k), safelyRepresent(v, runtime.disclosureBudget?.allowedLabels)]));
-  if (runtime.disclosureBudget && Buffer.byteLength(JSON.stringify(remoteResult)) > runtime.disclosureBudget.maxRemoteBytes) remoteResult = { withheld: true, reason: "disclosure_budget" };
+  const remoteBytes = Buffer.byteLength(JSON.stringify(remoteResult));
+  if (remoteBytes > runtime.grant.budget.maxOutputBytes) { status = "failed"; remoteResult = { withheld: true, reason: "output_budget" }; }
+  else if (runtime.disclosureBudget && remoteBytes > runtime.disclosureBudget.maxRemoteBytes) remoteResult = { withheld: true, reason: "disclosure_budget" };
   event("workflow.execution.completed", undefined, { status }, metrics.executionDurationMs); const receiptStarted = performance.now();
   createReceipt({ instructionHash: runtime.instructionHash ?? "unknown", canonicalHash: runtime.canonicalHash, status, events: recorder.events, metrics, remoteResult, observedEffects: effects }); metrics.receiptDurationMs = round(performance.now() - receiptStarted); metrics.totalDurationMs = round(performance.now() - recorder.startedAt);
   // Metrics are part of the hashed receipt, so rebuild once with final timing values.
-  return { localResult, receipt: createReceipt({ instructionHash: runtime.instructionHash ?? "unknown", canonicalHash: runtime.canonicalHash, status, events: recorder.events, metrics, remoteResult, observedEffects: effects }) };
+  const unsigned = createReceipt({ instructionHash: runtime.instructionHash ?? "unknown", canonicalHash: runtime.canonicalHash, status, events: recorder.events, metrics, remoteResult, observedEffects: effects });
+  return { localResult, receipt: runtime.receiptSigner ? await signReceipt(unsigned, runtime.receiptSigner) : unsigned };
 }
 
 function evaluate(expression: ValueExpression, variables: Record<string, GuardedValue>): GuardedValue {
@@ -100,3 +114,12 @@ function test(condition: ConditionExpression, variables: Record<string, GuardedV
 function sanitizeError(error: unknown): string { const message = error instanceof Error ? error.message : "UNKNOWN"; return message.split(":", 1)[0]!.replace(/[^A-Z0-9_]/gi, "_").toUpperCase().slice(0, 80); }
 function safeName(name: string): string { return /^[a-zA-Z][\w.-]{0,63}$/.test(name) ? name : "result"; }
 function safelyRepresent(value: GuardedValue, allowedLabels?: string[]): JsonValue { try { if (allowedLabels && value.guard.disclosures.some(label => !allowedLabels.includes(label))) throw new Error("LABEL_DENIED"); return remoteRepresentation(value, value.guard.sensitivity === "public" ? "value" : "handle"); } catch { return { withheld: true, type: value.handle?.type ?? typeof value.value }; } }
+
+async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) throw new Error("WORKFLOW_TIMEOUT");
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("WORKFLOW_TIMEOUT")), remaining); })]);
+  } finally { if (timer) clearTimeout(timer); }
+}

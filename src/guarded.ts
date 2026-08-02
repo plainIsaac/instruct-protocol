@@ -27,17 +27,20 @@ export function mergeGuards(values: GuardedValue[], transform?: Omit<Transformat
 }
 
 export class HandleStore {
-  readonly #values = new Map<string, GuardedValue>();
+  readonly #values = new Map<string, { handle: PrivateHandle; value: GuardedValue }>();
   constructor(readonly scope: string) {}
   create(value: GuardedValue, type = "unknown"): GuardedValue {
     const id = `h_${randomUUID()}`; const handle: PrivateHandle = { id, type, scope: this.scope, expiresAt: value.guard.expiresAt };
-    this.#values.set(id, value);
+    this.#values.set(id, { handle, value });
     return { kind: "guarded", handle, guard: { ...value.guard, sourceHandles: unique([...value.guard.sourceHandles, id]), scope: this.scope } };
   }
   resolve(handle: PrivateHandle): GuardedValue {
     if (handle.scope !== this.scope) throw new Error("HANDLE_SCOPE_VIOLATION");
-    if (handle.expiresAt && Date.parse(handle.expiresAt) <= Date.now()) throw new Error("HANDLE_EXPIRED");
-    const value = this.#values.get(handle.id); if (!value) throw new Error("HANDLE_NOT_FOUND"); return value;
+    const stored = this.#values.get(handle.id); if (!stored) throw new Error("HANDLE_NOT_FOUND");
+    if (stored.handle.scope !== handle.scope || stored.handle.type !== handle.type) throw new Error("HANDLE_METADATA_MISMATCH");
+    if (stored.handle.expiresAt && Date.parse(stored.handle.expiresAt) <= Date.now()) { this.#values.delete(handle.id); throw new Error("HANDLE_EXPIRED"); }
+    if (stored.value.guard.correlation === "single-use") this.#values.delete(handle.id);
+    return stored.value;
   }
 }
 

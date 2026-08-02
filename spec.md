@@ -10,8 +10,8 @@ It hosts or composes multiple protocols with different scopes:
 - **Instruct Core** defines the model-facing protocol, including lenient
   interpretation, the security boundary, authorization, guarded values,
   disclosure, execution lifecycle, and receipts.
-- **Toolring** is a strict, independently usable tool-orchestration protocol for
-  expressing a complete multi-step operation.
+- **[Toolring](./TOOLRING.md)** is a strict, independently usable
+  tool-orchestration protocol for expressing a complete multi-step operation.
 - **Instruct Lua** is a separate programmatic protocol and API for running
   model-supplied Lua in a constrained environment.
 
@@ -287,25 +287,22 @@ A completion receipt SHOULD contain:
 - integrity and optional chaining information.
 
 Receipt integrity MUST cover every field whose alteration would change the meaning
-of the receipt. Hashing requires a specified canonical serialization; ordinary
-runtime object serialization is not sufficient for interoperable receipts.
+of the receipt. The protocol defines receipt fields and their meaning, not a
+mandatory wire format. JSON, YAML, CBOR, or another representation MAY be used by
+an implementation or interoperability profile, provided it preserves the protocol
+semantics without ambiguity.
 
-#### 2.9.1 Version 0.1 canonical JSON and digests
+When a digest, MAC, or signature is computed, the applicable profile MUST define
+an unambiguous mapping from the semantic value to bytes. That mapping MUST NOT
+depend on map or object member order and MUST reject values it cannot represent
+without loss. It MUST also identify the integrity algorithm and all parameters
+needed for verification. Implementations MUST use algorithms considered secure for
+their purpose and MUST reject algorithms disabled by local security policy.
 
-Version 0.1 digests use UTF-8 encoded canonical JSON and SHA-256. The canonical
-encoder accepts JSON nulls, booleans, strings, finite numbers, arrays, and objects.
-Object member names are sorted in ascending Unicode code-point order. Undefined
-object members are omitted, matching JSON object serialization. Undefined array
-members, non-finite numbers, cycles, functions, symbols, big integers, and other
-non-JSON values MUST be rejected. Negative zero is encoded as `0`. No insignificant
-whitespace is emitted.
-
-Instruction, resolved-program, receipt, and receipt-chain digests MUST use this
-encoding. Receipt verification MUST reconstruct the receipt body without its
-`receiptHash` member and compare the lowercase hexadecimal SHA-256 digest in
-constant semantic form. This profile fixes deterministic encoding for the v0.1
-reference implementation; a future interoperable version may adopt a published
-canonicalization standard through explicit version negotiation.
+The core protocol does not mandate one serialization or cryptographic algorithm.
+Interoperability requires the producer and verifier to agree on a representation,
+canonicalization, and integrity profile. Profiles SHOULD support versioning and
+algorithm replacement without changing the meaning of the protected receipt.
 
 An implementation MUST distinguish at least:
 
@@ -315,258 +312,8 @@ An implementation MUST distinguish at least:
 
 A completed status does not imply that the result is remotely disclosable.
 
-## 3. Toolring Protocol
 
-### 3.1 Purpose
-
-Toolring is a DSL for advanced tool calling. It lets a producer, including a model,
-describe a complete high-level operation containing multiple tool calls and
-control-flow decisions,
-instead of requiring the repeated sequence:
-
-```text
-model response -> tool call -> model response -> tool call -> ...
-```
-
-Reducing round trips preserves execution continuity and reduces the number of times
-sensitive context must be exposed to a model. Toolring supports sequencing, nested
-execution, branching, bounded iteration, parallel branches, retries, fallback,
-recovery, and compensation.
-
-Toolring is deliberately strict. A Toolring executor accepts a valid Toolring
-program or rejects it. It does not repair tool names, infer missing control flow,
-reinterpret malformed arguments, or guess what its producer meant.
-
-This strictness makes Toolring portable, independently testable, and useful to
-producers other than models. An Instruct host MAY place a lenient interpretation
-layer in front of Toolring, but that layer is not part of Toolring.
-
-### 3.2 Representation and validation
-
-A Toolring program has one normative, strict representation. A conforming executor
-MUST validate that representation before execution and MUST reject invalid input.
-
-Other systems MAY compile their own languages or proposals into Toolring. Instruct,
-for example, can compile a lenient model-facing instruction proposal into a strict
-Toolring program. Such source languages, compilers, repairs, and interpretation
-decisions belong to those systems and are outside the Toolring protocol.
-
-Two Toolring programs that are to be compared or hashed require a specified
-canonical encoding. Canonical encoding does not make an invalid program valid and
-does not perform intent resolution.
-
-### 3.3 Program graph
-
-A Toolring program contains:
-
-- a Toolring version;
-- one entry node;
-- a map of unique node identifiers to nodes; and
-- any strict execution limits required by the program.
-
-A host or integration profile MAY attach authority and effect declarations. They
-are not interpreted as security grants by Toolring itself.
-
-Every control-flow target MUST name an existing node. Every node reachable through
-normal flow, branches, loop bodies, recovery, or compensation is part of static
-analysis. Unreachable nodes SHOULD produce a diagnostic and MAY be rejected by a
-strict host.
-
-The initial environment contains the program's inputs. Nodes MAY bind
-outputs to names. Reading an unknown binding MUST fail before the consuming
-operation is invoked.
-
-### 3.4 Value expressions
-
-A value expression is one of:
-
-- a literal value;
-- a reference to a named value; or
-- a template or other explicitly defined transform over values.
-
-Toolring preserves values according to its value model but does not define
-sensitivity or disclosure policy. An integration such as Instruct MAY associate
-opaque security metadata with values and define propagation rules for expressions.
-
-Evaluation of expressions MUST be side-effect-free.
-
-### 3.5 Node semantics
-
-#### 3.5.1 Tool node
-
-A tool node names a tool, provides argument expressions, optionally binds its
-result, and selects a successor.
-
-Before invocation, the host MUST:
-
-1. resolve and evaluate every argument;
-2. validate the tool's input contract; and
-3. charge the applicable Toolring execution limits.
-
-The tool result is bound before execution proceeds. Toolring does not itself decide
-whether a caller is authorized to invoke a tool; that is the responsibility of the
-host or an integration protocol such as Instruct.
-
-#### 3.5.2 Condition node
-
-A condition node evaluates a side-effect-free predicate and selects exactly one of
-two targets.
-
-The core comparison set includes equality, inequality, existence, truthiness, and
-ordered comparison. Profiles MAY add operators only with explicit semantics.
-
-#### 3.5.3 Loop node
-
-A loop node evaluates a finite collection, binds each item, executes its body, and
-then continues to an `after` target. Every loop MUST declare a positive maximum
-iteration count. Execution MUST fail or follow a configured recovery
-path if the collection exceeds that bound.
-
-#### 3.5.4 Parallel node and join
-
-A parallel node starts two or more logical branches and names a join point. A host
-MAY schedule branches concurrently or deterministically in sequence; observable
-semantics MUST NOT depend on scheduling unless the profile explicitly permits it.
-
-Branches MUST NOT create conflicting bindings at the join. Conflicting writes MUST
-be rejected statically when detectable and otherwise fail at runtime. Hosts MUST
-reject unsafe combinations of irreversible effects whose ordering or duplication
-could change the outcome.
-
-A join continues only after every required branch completes successfully or its
-failure has been handled.
-
-#### 3.5.5 Terminal node
-
-A terminal node evaluates named result expressions and ends its current execution
-path. Toolring returns the resulting values without defining their disclosure
-policy. An Instruct host independently derives their guarded and remote-safe
-representations.
-
-### 3.6 Failure handling
-
-Toolring distinguishes an **attempt failure** from an unhandled **path failure**.
-Operations MUST expose stable error codes suitable for programmatic control. A
-security integration such as Instruct is responsible for sanitizing error details
-before disclosure.
-
-An action MAY define a failure policy containing:
-
-- **retry**: repeat the same action up to a finite total attempt count;
-- **fallback**: try a different operation intended to produce a compatible result;
-- **recover**: transfer control to a named recovery path;
-- **compensate**: attempt to mitigate effects already produced; and
-- **propagate**: fail the enclosing path.
-
-Retries MUST be bounded. Each attempt consumes budgets and MAY produce effects.
-Hosts SHOULD restrict retries of non-idempotent or irreversible operations unless
-the tool declares an idempotency mechanism or safe retry contract.
-
-Fallback and recovery are not synonyms. A fallback substitutes another means of
-performing the failed operation. Recovery handles the failure and may return a
-degraded result, skip work, or terminate deliberately.
-
-Compensation is not rollback. It is a separate effectful operation that MAY fail.
-A Toolring executor MUST preserve the outcome of both the original operation and
-the compensation attempt. An integration MAY additionally require separate
-authorization. Compensation MUST NOT erase evidence that an effect occurred.
-
-If all configured handling is exhausted, failure propagates to the enclosing path.
-An unhandled failure at the root produces a failed run.
-
-#### Toolring action and failure flow
-
-```mermaid
-flowchart TD
-    E["Enter action node"] --> V["Evaluate and validate arguments"]
-    V --> A["Invoke tool"]
-    A -->|"success"| B["Bind result"]
-    B --> N["Continue to next node"]
-
-    A -->|"attempt failure"| C{"Attempts remaining?"}
-    C -->|"yes"| A
-    C -->|"no"| F{"Failure policy"}
-    F -->|"fallback"| FB["Invoke compatible substitute"]
-    F -->|"recover"| RP["Transfer to recovery path"]
-    F -->|"compensate"| CP["Attempt compensating operation"]
-    F -->|"propagate"| PF["Fail enclosing path"]
-
-    FB -->|"success"| B
-    FB -->|"failure"| PF
-    CP -->|"then recover"| RP
-    CP -->|"then propagate"| PF
-```
-
-Retry repeats the same action. Fallback substitutes another action, recovery moves
-control to another path, and compensation attempts to mitigate an already produced
-effect; none of these terms are interchangeable.
-
-### 3.7 Nesting
-
-A node or tool MAY invoke a child Toolring program only when the host explicitly
-supports nested execution. Nesting increments call depth and receives a portion of
-the parent's remaining execution limits.
-
-The parent MUST define how child outputs are bound and how child failures propagate.
-Cycles caused by nesting are permitted only under an independently enforced finite
-depth and execution budget.
-
-### 3.8 Cancellation and termination
-
-The host MAY cancel a run because of caller cancellation, policy change, budget
-exhaustion, shutdown, or safety enforcement. Tools and child executions SHOULD
-receive cancellation signals and SHOULD stop promptly.
-
-Cancellation does not imply rollback. The host MUST preserve observed effects and
-MAY invoke explicitly declared compensation when policy and remaining budget allow.
-
-A Toolring program terminates when its root path reaches a terminal node, suffers
-an unhandled failure, or is cancelled. Invalid Toolring input is rejected before
-execution. Authorization denial, when applicable, belongs to the integrating host.
-Infinite implicit waiting is not valid execution behavior.
-
-### 3.9 Static analysis
-
-Before execution, a conforming Toolring host MUST reject a program with:
-
-- a missing entry or control-flow target;
-- duplicate node identifiers;
-- an unknown node kind or tool;
-- an unbounded loop, retry policy, or recursive expansion;
-- an invalid nested program; or
-- a statically evident unsafe parallel effect conflict.
-
-Hosts SHOULD also diagnose unreachable nodes, incompatible fallback results,
-references that cannot be bound on every incoming path, and compensation that is
-not valid for the corresponding tool or effect.
-
-### 3.10 Host extensions
-
-Extensions MUST be namespaced and versioned. A host MUST reject an unknown extension
-that affects execution or security semantics. It MAY ignore unknown purely
-descriptive metadata.
-
-An extension MUST NOT weaken Instruct requirements when executed inside an Instruct
-host.
-
-### 3.11 Instruct integration
-
-When Instruct executes a Toolring program, Instruct supplies responsibilities that
-Toolring deliberately does not define:
-
-- lenient interpretation of the model's instruction proposal;
-- resolution of tool aliases, arguments, defaults, and contextual handles;
-- capability, effect, destination, and policy authorization;
-- guarded-value propagation and disclosure control;
-- child-authority and budget restriction;
-- sanitization of events, errors, and results; and
-- receipts and security auditing.
-
-These checks occur before and around strict Toolring validation and execution. They
-do not relax Toolring's syntax or execution semantics. Interpretation succeeds only
-when it produces a valid Toolring program.
-
-## 4. Instruct Lua Programmatic Protocol
+## 3. Instruct Lua Programmatic Protocol
 
 Instruct Lua is a separate way to express advanced operations. It is not Toolring
 syntax, a serialization of a Toolring graph, or a Toolring execution profile.
@@ -601,7 +348,7 @@ but conformance and observable semantics remain those of the protocol originally
 submitted. Such translation MUST NOT make Toolring or Lua features implicitly part
 of the other protocol.
 
-### 4.1 Programmatic API
+### 3.1 Programmatic API
 
 The Lua environment exposes a small, capability-mediated API for reading explicit
 inputs, invoking host tools, and returning a result. Tool invocation from Lua is a
@@ -621,7 +368,7 @@ Calls through the Lua API remain subject to Instruct authorization. The program
 MUST NOT obtain a capability, tool, value, destination, or budget merely by naming
 or constructing it in Lua.
 
-### 4.2 Sandbox boundary
+### 3.2 Sandbox boundary
 
 The Lua runtime MUST NOT expose filesystem, network, process, package loading,
 clocks, randomness, environment variables, native modules, debug facilities, or
@@ -635,7 +382,7 @@ Standard output, standard error, exceptions, traces, and API errors are disclosu
 surfaces. Sensitive values in them MUST be replaced with safe handles or withheld
 markers before leaving the trusted boundary.
 
-### 4.3 Language-level control flow
+### 3.3 Language-level control flow
 
 Lua conditionals, loops, functions, and error handling belong to Lua execution,
 not Toolring. Their limits are enforced by the Lua sandbox's instruction, memory,
@@ -645,7 +392,7 @@ Toolring retry, recovery, compensation, parallel, and join semantics do not appl
 to Lua code unless the Lua API defines an explicit, separately named equivalent.
 Ordinary Lua exception handling MUST NOT be described as Toolring recovery.
 
-## 5. Conformance and open issues
+## 4. Conformance and open issues
 
 Conformance is assessed separately for:
 
@@ -661,6 +408,7 @@ compensation, cancellation, and budget exhaustion.
 
 The following matters remain intentionally unsettled in this draft:
 
+- concrete wire encodings, canonicalization profiles, and integrity algorithms;
 - a complete schema for capsules, guards, Toolring programs, events, and receipts;
 - lexical rules for names, capabilities, effects, and extensions;
 - precise scope and correlation semantics for handles and pseudonyms;

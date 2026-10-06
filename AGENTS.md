@@ -20,3 +20,11 @@ This file extends the workspace-level `AGENTS.md` for this repository.
 - Run a focused Vitest target first, then `pnpm check`.
 - Use `pnpm test:security` for authorization, guarded-value, disclosure, sandbox, or production-profile changes.
 - Run performance or live benchmark scripts only when relevant; never place credentials or sensitive benchmark payloads in tracked output.
+
+## Issues and agent coordination
+
+- Use the project's external issue tracker (GitHub Issues for GitHub-hosted projects) for issues shared across agents, sessions, or worktrees. Do not use Markdown issue files or repository backlogs for cross-context tracking.
+- Track project defects and also agent implementation blockers, tool/integration failures, and understanding gaps. Classify the kind and affected scope; a local agent/tool problem is not automatically a project-wide defect.
+- Search for an existing issue before filing; link the affected task/PR and include the evidence, expected behavior, and next action another agent needs.
+- Local working notes are temporary and untracked. They are not a shared queue or durable handoff; promote an unresolved issue to the tracker before handing off.
+- Specs, plans, decisions, and runbooks may remain Markdown. Existing Markdown issue/backlog entries are historical evidence, not an active tracker: move or link unresolved entries to the tracker when working on them, preserving context. Do not silently delete or mark them resolved.

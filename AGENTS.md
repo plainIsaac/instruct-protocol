@@ -27,4 +27,3 @@ This file extends the workspace-level `AGENTS.md` for this repository.
 - Track project defects and also agent implementation blockers, tool/integration failures, and understanding gaps. Classify the kind and affected scope; a local agent/tool problem is not automatically a project-wide defect.
 - Search for an existing issue before filing; link the affected task/PR and include the evidence, expected behavior, and next action another agent needs.
 - Local working notes are temporary and untracked. They are not a shared queue or durable handoff; promote an unresolved issue to the tracker before handing off.
-- Specs, plans, decisions, and runbooks may remain Markdown. Existing Markdown issue/backlog entries are historical evidence, not an active tracker: move or link unresolved entries to the tracker when working on them, preserving context. Do not silently delete or mark them resolved.

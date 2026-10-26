@@ -216,6 +216,45 @@ A guarded value can contain a local value, an opaque handle, or both. Possession
 a handle is not authority to resolve it. A host MUST validate handle scope, expiry,
 and applicable policy on every resolution.
 
+#### Reference tool-operation and destination profile
+
+The TypeScript host enforces argument guards in the shared `invokeTool` boundary,
+used by Toolring tool nodes and Lua `instruct.tool` calls. Before the invocation
+callback or `execute`/`simulate`, it validates every incoming guarded argument,
+rejects elapsed guard or handle expiry, checks each required operation, and checks
+the tool destination. Invalid or expired inputs MUST NOT reach the tool. An
+already-aborted signal or elapsed execution deadline also prevents invocation.
+Capability/effect authorization remains the caller's separate responsibility.
+Hosts can supply additional data/control dependencies through
+`ToolContext.guardContributors`; these are checked and propagated even when no
+argument is supplied. Callers that conservatively track program-wide taint must
+supply those contributors explicitly, rather than relying on an argument to exist.
+
+- A trusted `ToolDefinition.operations` lists **all** operations required of
+  **each** argument. When omitted it defaults to `[tool.capability]`; an explicit
+  empty, duplicate, or malformed list is invalid, not unrestricted authority.
+- Operation names match exactly. Only the complete token `*` grants every
+  operation; prefixes and other glob patterns have no special meaning. Every
+  required operation must be present, unless the argument explicitly permits `*`.
+- `local` permits delivery to any registered host tool; `tool:<canonical-name>`
+  permits only that tool, not its aliases or other tools sharing its capability.
+  `tool:*` permits any host tool but never remote disclosure. Either `local` or a
+  matching tool destination suffices. `remote` alone never permits tool delivery.
+  These tokens govern the host entry point, not a tool's downstream network or
+  filesystem behavior: trusted tool implementations and host policy must enforce
+  their actual resource and disclosure boundaries.
+- Empty operation or destination sets deny. Intersection treats `*` as the
+  operation universe and `local`/`tool:*` as covering concrete tool destinations;
+  it retains the narrower permission. Disjoint intersections stay empty.
+- Public/literal `defaultGuard` values explicitly permit `*` operations and only
+  `local` destinations. Sensitive defaults permit no operations. Defaults never
+  reinterpret or expand an explicitly supplied empty/restricted guard.
+
+Registered tool definitions are host-authorized trusted code/configuration, not
+model-supplied authority. Calling a definition's raw `execute` method bypasses
+`invokeTool`; it is an internal trusted-host action, not an authorized protocol
+entry point. This profile does not claim isolation from a malicious host tool.
+
 #### 2.6.1 Derivation
 
 A value derived from guarded inputs MUST remain guarded. Unless a trusted transform
@@ -233,6 +272,27 @@ For ordinary composition:
 Merely formatting, summarizing, aggregating, templating, encrypting, encoding, or
 passing a value through a model does not declassify it. Declassification MUST be an
 explicit trusted operation with recorded guarantees and policy authorization.
+
+Tool results ordinarily merge the output guard with **all** argument guards, even
+when a tool returns a public value or a transformation record marked `trusted`.
+An output's self-reported trust does not authorize relaxing an input restriction.
+The reference host permits replacement only through a host-authorized
+`ToolDefinition.outputTransform`, with a non-empty name and explicit guarantees.
+For that audited transform, output sensitivity, permissions, scope, disclosure
+labels and correlation policy may replace the input restrictions; provenance,
+source handles and transformation history are retained, and expiry remains bounded
+by the earliest contributing guard **or handle** expiry. The host records the
+trusted transform and its guarantees. Invalid or expired resulting guarded values
+are rejected. Registering such a transform is a host policy decision, not something
+a model, Lua program, process response, or returned guard may request for itself.
+
+The confidential retrieval service explicitly declares `semantic-search` for
+search and `present-best-match` for local presentation. Its trusted search transform
+exchanges query-use permission for an opaque session-scoped search handle permitting
+only presentation; raw documents, paths, scores and vectors stay in the service.
+Its trusted presentation transform returns only a fixed public operation-status
+receipt after the authorized local presentation. These guarantees depend on the
+audited service implementation, not on a generic guard validator.
 
 #### 2.6.2 Remote representation
 
@@ -268,6 +328,42 @@ iteration count, nesting depth, and remote disclosure bytes.
 A child execution MUST NOT receive a budget or authority greater than its parent.
 Budget exhaustion MUST terminate or safely divert the affected operation and MUST
 NOT cause sensitive diagnostic data to cross the trust boundary.
+
+In the TypeScript reference profile, workflow node visits, additional action
+attempts, and Lua instructions
+consume one run-wide cumulative instruction allowance. Lua consumption is rounded
+up conservatively within a 100-instruction hook quantum, including executions
+shorter than one quantum. A child reserves its instruction allocation before
+startup; unused instructions are returned only on a trusted worker report. A
+timeout, cancellation, or worker loss retains the entire unreported allocation.
+Retries, serially scheduled branches, loops, compensation, and recovery do not
+replenish instructions, output, tool calls, or elapsed time.
+
+Produced output means UTF-8 JSON bytes of tool values (or handle descriptors),
+Lua return values, and the named root terminal result. Each production boundary
+is charged, including unassigned or later discarded outputs and results from
+failed attempts; rebinding alone is not charged. A terminal returning a previously
+produced value is another production boundary. A child's own output limit also
+applies cumulatively to its tool results and return value. If a worker cannot
+report a final output on timeout/cancellation/loss, its remaining output allocation
+is conservatively consumed. Instruction consumption and output sizes remain host-local, not event
+or receipt fields. Remote disclosure bytes remain a separate finalization limit.
+
+The execution deadline includes Lua VM startup and is never reset at VM readiness.
+No further tool may start after cancellation, settlement, or the applicable
+deadline. Worker termination is awaited before the next serial child starts.
+`maxMemoryBytes` limits peak-live Lua VM memory, not cumulative allocations across
+serial workers; it is not a limit on total Node.js/host/tool memory. Deployments
+still require OS-level memory and process limits.
+
+Workflow condition operands and loop collections conservatively contribute their
+guards to subsequent evaluated values, tool arguments, bindings, and terminal
+results, including after joins and recovery. This prevents a public constant or
+public input selected by private control flow from being treated as independent
+of the predicate. It does **not** establish whole-receipt noninterference: event
+paths, counts, durations, status, error codes, result names/types, and withheld
+markers can still reveal control-dependent information. Hosts requiring stronger
+privacy must restrict or coarsen that metadata outside this reference profile.
 
 ### 2.9 Events and receipts
 

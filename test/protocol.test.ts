@@ -13,7 +13,7 @@ function fixtures() {
   tools.register({
     name: "workspace.search", aliases: ["search workspace", "find"], capability: "tool:search", effects: [],
     inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
-    async execute() { return guarded([secret], { ...defaultGuard("run", "secret"), provenance: ["fixture:vault"], permittedOperations: ["summarize"] }); }
+    async execute() { return guarded([secret], { ...defaultGuard("run", "secret"), provenance: ["fixture:vault"], permittedOperations: ["tool:draft"] }); }
   });
   tools.register({
     name: "message.draft", aliases: ["draft"], capability: "tool:draft", effects: [{ type: "draft", resource: "message", reversible: true }],

@@ -16,6 +16,7 @@ export function processTool(options: ProcessToolOptions): ToolDefinition {
   if (!options.command || !Number.isSafeInteger(options.maxResponseBytes ?? 1_000_000) || (options.maxResponseBytes ?? 1_000_000) <= 0) throw new ProtocolError("INVALID_PROCESS_TOOL_OPTIONS");
   return {
     name: options.name, aliases: options.aliases, capability: options.capability,
+    operations: options.operations, outputTransform: options.outputTransform,
     effects: options.effects, idempotent: options.idempotent, inputSchema: options.inputSchema, outputSchema: options.outputSchema,
     isolation: "process", execute: (toolArgs, context) => invokeProcess(options, toolArgs, context)
   };

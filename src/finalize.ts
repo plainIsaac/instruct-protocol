@@ -37,10 +37,18 @@ export interface FinalizeInput {
 /** Applies disclosure and output budgets, then builds and optionally signs the receipt. */
 export async function finalizeRun(input: FinalizeInput): Promise<ExecutionResult> {
   let status = input.status; const used = new Set<string>();
-  let remoteResult: Record<string, JsonValue> = Object.fromEntries(Object.entries(input.localResult).map(([name, value], index) => {
-    // Result names reach the model, so only plain identifiers pass and collisions get a positional name.
-    let key = /^[a-zA-Z][\w.-]{0,63}$/.test(name) ? name : "result";
-    if (used.has(key)) key = `result_${index}`; used.add(key);
+  const entries = Object.entries(input.localResult);
+  const validName = (name: string) => /^[a-zA-Z][\w.-]{0,63}$/.test(name);
+  const reserved = new Set(entries.map(([name]) => name).filter(validName));
+  let fallbackSuffix = 0;
+  let remoteResult: Record<string, JsonValue> = Object.fromEntries(entries.map(([name, value], index) => {
+    // Fallback names must not overwrite earlier results or steal a later valid name.
+    let key = validName(name) ? name : "result";
+    if (!validName(name)) {
+      fallbackSuffix = Math.max(fallbackSuffix, index);
+      while (used.has(key) || reserved.has(key)) key = `result_${fallbackSuffix++}`;
+    }
+    used.add(key);
     return [key, remoteSafeValue(value, input.policy)];
   }));
   const remoteBytes = Buffer.byteLength(JSON.stringify(remoteResult));

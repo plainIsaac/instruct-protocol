@@ -40,9 +40,18 @@ pnpm check
 pnpm test:security
 ```
 
-`pnpm release:check` runs the full release gate: checks, security tests, a
-production dependency audit, and a dry-run pack. Changes are listed in
-`CHANGELOG.md`.
+`pnpm release:check` runs type checking, the complete test suite, focused
+security tests, a production dependency audit, and package checks. Its
+`pnpm test:consumer` step packs the library, installs that tarball in a fresh
+consumer, and exercises the public API without importing repository sources.
+It tests filesystem-backed retrieval and local presentation, authenticated
+receipts and tamper rejection, authorization and guard denial, Lua execution,
+process-tool execution, sanitized failures, cancellation, and process timeout.
+These checks run on Node 22 and 24 in CI. Changes are listed in `CHANGELOG.md`.
+
+This is an exercised reference integration, not a live-model quality benchmark,
+an operating-system sandbox, or evidence of complete information-flow isolation.
+Search quality still depends on the supplied embedder and intent interpreter.
 
 The library includes hardened application boundaries, but production readiness is
 a property of a specific deployment. In particular, effectful tools need OS-level
@@ -68,11 +77,18 @@ A code capsule or code node defines `function main(instruct)`. Its return value 
 - `instruct.inputs` holds the evaluated inputs. A handle-only value appears as `{ ["$handle"] = id, type = type }`.
 - `instruct.tool(name, args)` calls a registered tool by exact name and returns its value or handle. The call succeeds only if the tool's capability and every one of its effects are both declared and granted. On failure it raises a stable code string, such as `TOOL_CAPABILITY_DENIED`, that the program can catch with `pcall`. A handle passed back as an argument resolves only if this run received that handle.
 - Lua values carry no guards. Every tool argument, and the program result, therefore inherits the merged guard of all inputs and tool results the program has seen.
-- Instructions, memory, output bytes, tool calls, and wall-clock time are all budgeted. A code node gets only the parent workflow's remaining time and tool calls. `setmetatable` refuses `__gc`, because finalizers would run unmetered.
+- Instructions, produced JSON output, and tool calls use one cumulative workflow/Lua budget across children, loops, retries, and recovery. The deadline includes VM startup. Lua memory is a peak-live per-worker allocation limit, not a limit on host or tool-process memory. `setmetatable` refuses `__gc`, because finalizers would run unmetered.
 
 ### Toolring failure handling
 
 `retry.attempts` repeats an action. When the attempts are exhausted, `retry.compensate` names a compensation path, which runs as ordinary authorized nodes, and `retry.recover` names where control continues. The compensation outcome is recorded as `node.compensated` or `node.compensation.failed` and never masks the original failure. Analysis rejects retrying a tool with an irreversible effect unless the tool sets `idempotent: true`.
+
+The current strict profile rejects terminal nodes reachable inside a loop before
+its loop boundary, inside a parallel branch before its join, or in compensation.
+Root terminal and root recovery results remain valid; nested results are never
+silently discarded. `observedEffects` conservatively records the declared possible
+effects of calls that entered execution, including failed or timed-out calls.
+It is not a claim that every declared effect occurred or that compensation undid it.
 
 `examples/confidential-file-search.ts` is a concrete protocol benchmark for finding a vaguely remembered file on a confidential workstation. The model-facing workflow receives only the user's description, an opaque scoped search handle, and a public presentation receipt. Filenames, content, similarity scores, and vectors remain inside a trusted local retrieval service. `HashingEmbedder` makes the example deterministic and offline; the `TrustedEmbedder` and `TrustedIntentInterpreter` interfaces are intended to be replaced by pinned, audited local models.
 
@@ -99,4 +115,32 @@ Run `pnpm test:live` for a persistent watch session or `pnpm test:performance` f
 
 ## Value guards
 
-Every value carries sensitivity, disclosure labels, provenance, contributing handles, transformation history, permitted operations and destinations, scope, expiry, and correlation policy. Composite values inherit the strictest contributing guard. Trusted transforms may explicitly record a declassification guarantee; merely modifying or summarizing a value does not make it public.
+Every value carries sensitivity, disclosure labels, provenance, contributing handles, transformation history, permitted operations and destinations, scope, expiry, and correlation policy. Composite values inherit the strictest contributing guard.
+
+- A tool declares `operations` (default: its capability). Each argument and implicit
+  dependency must permit every operation and its `tool:<registered-name>` destination.
+  `local` permits local registered tools; `tool:<name>` narrows that authority.
+- Empty permissions deny. `defaultGuard(scope)` for a public value explicitly grants
+  `*` operations; sensitive defaults grant none. Wildcard intersections retain the
+  narrower permission. Expired guards and handles fail before tool execution.
+  Retrieval persists inherited deadlines in its authoritative handle store, so a
+  caller cannot extend a handle's life by editing returned metadata.
+- `HandleStore` snapshots stored values, returned descriptors, and resolved values;
+  payloads must support `structuredClone` (protocol JSON payloads do). Mutating a
+  returned object does not change the stored value or deadline.
+- Ordinary tool outputs inherit input restrictions. Declassification requires an
+  audited, host-registered `outputTransform` with explicit guarantees; a returned
+  guard cannot authorize its own declassification. The retrieval example declares
+  trusted handle-creation and fixed-status transforms explicitly.
+- Conditions and loops conservatively retain control dependencies for subsequent
+  outputs and tool calls, including no-argument calls and child Lua programs.
+  This can intentionally withhold results that a more precise analysis could allow.
+- Lua checks all-seen dependencies even for empty argument tables and known handles.
+  Its static analyzer ignores data in strings/comments and property names. It is
+  advisory, not a full Lua parser or the security boundary. Local bindings that
+  shadow forbidden global names (for example `local os`) are still conservatively
+  rejected; use another local name.
+
+Timing, event/control-flow metadata, and completion/failure signaling remain
+observable. This profile does not promise complete information-flow isolation;
+see `SECURITY.md` before using it with sensitive workloads.

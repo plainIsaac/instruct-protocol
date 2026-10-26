@@ -1,12 +1,18 @@
 import { ProtocolError, errorCode } from "./errors.js";
+import { ExecutionBudget } from "./execution-budget.js";
 import type { AnalysisReport, Budget, CodeProgram, Effect, ExecutionMetrics, Grant, GuardedValue, JsonValue } from "./types.js";
 import { effectAllowed } from "./analyze.js";
 import { defaultGuard, guarded, mergeGuards } from "./guarded.js";
 import { EventRecorder } from "./observability.js";
 import { invokeTool, type ToolRegistry } from "./tools.js";
 import { runLuaSandbox } from "./lua-sandbox.js";
+import { analyzeLuaSource } from "./lua-analysis.js";
 
 export interface ProgramRuntime {
+  /** Internal shared run-wide resource ledger; counters remain local. */
+  executionBudget?: ExecutionBudget;
+  /** Implicit dependencies inherited from the caller's control flow. */
+  guardContributors?: readonly GuardedValue[];
   inputs: Record<string, GuardedValue>;
   /** Effective authority for the program. Callers pass the declared ∩ granted capabilities. */
   grant: Grant;
@@ -18,7 +24,7 @@ export interface ProgramRuntime {
   simulate?: boolean;
   /** Reject effectful tools that are not process-isolated (production profile). */
   requireIsolatedEffects?: boolean;
-  /** Receives the declared effects of every tool the program invoked successfully. */
+  /** Receives attempted declared effects on execution entry, including failed/timed-out calls. Not proof of exact effects or rollback. */
   observedEffects?: Effect[];
   metrics?: ExecutionMetrics;
   recorder?: EventRecorder;
@@ -26,12 +32,6 @@ export interface ProgramRuntime {
   /** Called after validation, immediately before a tool enters execute/simulate. */
   onToolInvoked?: () => void;
 }
-
-const forbidden: [RegExp, string][] = [
-  [/\b(require|dofile|loadfile|load|string\.dump|package|io|os|debug|collectgarbage)\b/, "FORBIDDEN_API"],
-  [/\b(while|repeat|goto)\b/, "UNBOUNDED_CONTROL_FLOW"],
-  [/["'](?:https?:|file:|\\\\|\/)/, "AMBIENT_RESOURCE_LITERAL"]
-];
 
 /**
  * Advisory static checks. The sandbox removes ambient APIs and meters execution at
@@ -41,13 +41,7 @@ export function analyzeProgram(program: CodeProgram, grant: Grant, tools?: ToolR
   const issues: AnalysisReport["issues"] = [];
   if (program.language !== "lua") issues.push({ severity: "error", code: "UNSUPPORTED_LANGUAGE", message: program.language });
   if (!grant.capabilities.includes("code:execute")) issues.push({ severity: "error", code: "CAPABILITY_DENIED", message: "code:execute" });
-  for (const [pattern, code] of forbidden) if (pattern.test(program.source)) issues.push({ severity: "error", code, message: `Program matched ${pattern}` });
-  for (const match of program.source.matchAll(/instruct\.tool\s*\(\s*["']([^"']+)["']/g)) {
-    const capability = tools ? tools.get(match[1]!)?.capability : `tool:${match[1]}`;
-    if (!capability) issues.push({ severity: "error", code: "UNKNOWN_TOOL", message: match[1]! });
-    else if (!grant.capabilities.includes(capability)) issues.push({ severity: "error", code: "CAPABILITY_DENIED", message: capability });
-  }
-  for (const match of program.source.matchAll(/for\s+\w+\s*=\s*(-?\d+)\s*,\s*(-?\d+)/g)) if (Math.abs(Number(match[2]) - Number(match[1])) > 100_000) issues.push({ severity: "error", code: "LOOP_LIMIT_EXCEEDED", message: match[0] });
+  issues.push(...analyzeLuaSource(program.source, grant, tools));
   return { valid: !issues.some(i => i.severity === "error"), issues, capabilities: ["code:execute"], effects: [] };
 }
 
@@ -64,11 +58,16 @@ export async function executeProgram(program: CodeProgram, runtime: ProgramRunti
   let budget: Budget;
   try { budget = restrictBudget(runtime.grant.budget, program.budget); }
   catch (error) { recorder?.emit("program.denied", runtime.parentNodeId, { codes: [errorCode(error, "INVALID_PROGRAM_BUDGET")] }); throw new ProtocolError("PROGRAM_DENIED:INVALID_PROGRAM_BUDGET"); }
-  // Reset when the VM is ready, matching the sandbox's own timer; tools cannot run before then.
-  let deadline = performance.now() + budget.maxDurationMs;
+  const ledger = runtime.executionBudget ?? new ExecutionBudget(budget, started);
+  const deadline = Math.min(ledger.deadline, started + budget.maxDurationMs);
+  let producedBytes = 0;
+  const consumeOutput = (value: unknown) => {
+    producedBytes += ledger.consumeOutput(value);
+    if (producedBytes > budget.maxOutputBytes) throw new ProtocolError("OUTPUT_BUDGET_EXCEEDED");
+  };
   // Everything the program has read. Lua cannot carry guards, so every tool argument
   // and the result conservatively inherit all of them.
-  const contributors: GuardedValue[] = Object.values(runtime.inputs);
+  const contributors: GuardedValue[] = [...Object.values(runtime.inputs), ...(runtime.guardContributors ?? [])];
   const handles = new Map<string, GuardedValue>();
   for (const value of contributors) if (value.handle) handles.set(value.handle.id, value);
   const finished = new AbortController();
@@ -86,7 +85,10 @@ export async function executeProgram(program: CodeProgram, runtime: ProgramRunti
     const detail = { tool: tool?.name ?? null };
     try {
       if (toolSignal.aborted) throw new ProtocolError("EXECUTION_ABORTED");
+      if (performance.now() >= deadline) throw new ProtocolError("PROGRAM_TIMEOUT");
+      if (producedBytes >= budget.maxOutputBytes) throw new ProtocolError("OUTPUT_BUDGET_EXCEEDED");
       if (++calls > budget.maxToolCalls) throw new ProtocolError("TOOL_CALL_BUDGET_EXCEEDED");
+      ledger.consumeToolCall();
       if (!tool) throw new ProtocolError("TOOL_NOT_FOUND");
       if (!runtime.grant.capabilities.includes(tool.capability)) throw new ProtocolError("TOOL_CAPABILITY_DENIED");
       if (tool.effects.some(e => !effectAllowed(e, runtime.grant.effects) || !effectAllowed(e, runtime.declaredEffects ?? runtime.grant.effects))) throw new ProtocolError("TOOL_EFFECT_DENIED");
@@ -97,10 +99,14 @@ export async function executeProgram(program: CodeProgram, runtime: ProgramRunti
       const args = toGuardedArguments(rawArgs, taint, handles);
       const output = await invokeTool(tool, args, {
         signal: AbortSignal.any([toolSignal, AbortSignal.timeout(Math.max(1, Math.ceil(deadline - performance.now())))]),
-        simulate: runtime.simulate ?? false, variables: Object.freeze({})
-      }, deadline, runtime.onToolInvoked);
+        simulate: runtime.simulate ?? false, variables: Object.freeze({}), guardContributors: contributors
+      }, deadline, () => {
+        if (toolSignal.aborted) throw new ProtocolError("EXECUTION_ABORTED");
+        if (performance.now() >= deadline) throw new ProtocolError("PROGRAM_TIMEOUT");
+        runtime.observedEffects?.push(...tool.effects); runtime.onToolInvoked?.();
+      });
       contributors.push(output); if (output.handle) handles.set(output.handle.id, output);
-      runtime.observedEffects?.push(...tool.effects);
+      consumeOutput(toLua(output));
       recorder?.emit("program.tool.completed", runtime.parentNodeId, detail, performance.now() - toolStarted);
       return toLua(output);
     } catch (error) {
@@ -112,16 +118,21 @@ export async function executeProgram(program: CodeProgram, runtime: ProgramRunti
   try {
     recorder?.emit("program.started", runtime.parentNodeId, { language: program.language });
     const inputs = Object.fromEntries(Object.entries(runtime.inputs).map(([k, v]) => [k, toLua(v)]));
+    const allocation = ledger.reserveInstructions(budget.maxInstructions);
     const { value } = await runLuaSandbox({
-      source: program.source, inputs, signal: runtime.signal, callTool, onReady: () => { deadline = performance.now() + budget.maxDurationMs; },
-      maxInstructions: budget.maxInstructions, maxMemoryBytes: budget.maxMemoryBytes, maxDurationMs: budget.maxDurationMs
+      source: program.source, inputs, signal: runtime.signal, callTool, deadline,
+      maxInstructions: allocation.limit, onInstructions: allocation.settle, maxMemoryBytes: budget.maxMemoryBytes, maxDurationMs: budget.maxDurationMs
     });
-    const outputBytes = Buffer.byteLength(JSON.stringify(value));
-    if (outputBytes > budget.maxOutputBytes) throw new ProtocolError("OUTPUT_BUDGET_EXCEEDED");
+    consumeOutput(value);
     // Instruction counts and output sizes depend on guarded data, so they stay out of events.
     recorder?.emit("program.completed", runtime.parentNodeId, { toolCalls: calls }, performance.now() - started);
     return guarded(value, contributors.length ? mergeGuards(contributors, { name: "sandboxed-lua", trusted: false, guarantees: [] }) : defaultGuard("program"));
   } catch (error) {
+    // Without a final worker report, keep the child's still-unreported output allocation
+    // consumed as well. A retry must not mint resources by timing out its predecessor.
+    if (["PROGRAM_TIMEOUT", "SANDBOX_STARTUP_TIMEOUT", "SANDBOX_FAILED", "EXECUTION_ABORTED"].includes(errorCode(error, "LUA_RUNTIME_ERROR"))) {
+      ledger.outputBytes = Math.max(0, ledger.outputBytes - Math.max(0, budget.maxOutputBytes - producedBytes));
+    }
     recorder?.emit("program.failed", runtime.parentNodeId, { code: errorCode(error, "LUA_RUNTIME_ERROR") }, performance.now() - started);
     throw error;
   } finally {

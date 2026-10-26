@@ -38,14 +38,23 @@ load or store signing material itself.
 
 ## Known limitations
 
-- A hostile program or workflow can still signal a few bits per run to the model:
-  completed versus failed, which allowlisted error code it triggers, the type in a
-  withheld marker, and which output budget withheld a result. Deployments that
-  cannot accept this should limit how many runs a model may request.
-- Lua worker startup, bounded at 5 seconds, is not counted against the program's
-  time budget, so a code node can overrun its parent's deadline by that startup time.
-- In-process tools that ignore cancellation keep running after a timeout; only
-  process-isolated tools are terminated.
+- Guarded values do not establish noninterference. Timing, event/control-flow
+  metadata, operation counts, completion/failure, allowlisted errors, withheld types,
+  and budget outcomes can reveal information derived from sensitive inputs. Do not
+  expose detailed receipts to an adversary requiring zero such leakage; rate limits
+  reduce repeated probing but do not eliminate the channel.
+- The shared instruction/output/tool-call ledger is cumulative, and the execution
+  deadline includes Lua startup. The Lua memory bound is peak-live WASM memory for
+  serialized workers, not host memory, total allocation churn, or child-process RAM.
+- `observedEffects` records declared possible effects of entered tool calls even
+  when they fail or time out. It is evidence of attempted authority, not exact
+  external-effect confirmation or proof of rollback.
+- In-process tools that ignore cancellation keep running after a timeout; the
+  process adapter kills the direct child, not a guaranteed entire process tree.
+  OS policy must constrain descendants and resource access.
+- Registered tools and `outputTransform` declarations are trusted host policy.
+  Calling a raw tool's `execute` method bypasses protocol mediation. Package checks
+  and adversarial regressions do not replace external review or deployment controls.
 
 ## Required deployment controls
 

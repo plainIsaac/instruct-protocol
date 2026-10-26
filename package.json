@@ -49,14 +49,15 @@
     "test": "vitest run",
     "test:live": "vitest --reporter=verbose",
     "test:performance": "vitest run test/performance.test.ts --reporter=verbose",
-    "test:security": "vitest run test/conformance.test.ts test/production-hardening.test.ts test/production-profile.test.ts test/sandbox.test.ts --reporter=verbose",
+    "test:security": "vitest run test/conformance.test.ts test/production-hardening.test.ts test/production-profile.test.ts test/sandbox.test.ts test/tool-guards.test.ts test/lua-guard-integration.test.ts test/control-guard-integration.test.ts test/execution-budgets.test.ts test/nested-paths.test.ts test/lua-analysis.test.ts test/result-names.test.ts test/handle-expiry-integration.test.ts --reporter=verbose",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "bench:live": "pnpm build && node scripts/live-confidential-benchmark.mjs",
     "bench:warning": "pnpm build && node scripts/live-warning-baseline.mjs",
     "typecheck": "tsc -p tsconfig.check.json",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepack": "pnpm build",
-    "release:check": "pnpm check && pnpm test:security && pnpm audit --prod && pnpm pack --dry-run"
+    "test:consumer": "node scripts/verify-package.mjs",
+    "release:check": "pnpm check && pnpm test:security && pnpm audit --prod && pnpm pack --dry-run && pnpm test:consumer"
   },
   "engines": {
     "node": ">=22"

@@ -6,6 +6,39 @@ the protocol, wire format, and public API.
 
 ## [Unreleased]
 
+### Dependability fixes
+
+- Enforce argument and implicit-dependency operations, tool destinations, input
+  validity, expiry, cancellation, and deadlines before execution. Empty permissions
+  deny; wildcard intersections preserve narrower authority.
+- Preserve input guards in ordinary tool outputs. Restriction replacement requires
+  explicit, audited host `outputTransform` metadata; retrieval declares its trusted
+  search-handle and operation-status transforms.
+- Carry all-seen Lua and workflow control restrictions through empty arguments,
+  known handles, and child execution. Use own-only workflow bindings.
+- Reject nested terminals before loop/parallel boundaries instead of discarding
+  their results. Preserve root terminal and root recovery behavior.
+- Share cumulative instructions, produced output bytes, tool calls, and deadlines
+  across child Lua runs, retries, loops, branches, compensation, and recovery.
+  Include VM startup in the deadline and retain unreported allocations on loss.
+- Record declared attempted effects when tools enter execution, including failures
+  and timeouts, without claiming exact effect confirmation or rollback.
+- Analyze Lua tokens rather than raw source text, accepting harmless strings,
+  comments, property names, URLs and paths without weakening runtime mediation.
+- Preserve search-handle deadlines in authoritative storage before release, and
+  snapshot stored/returned/resolved values so caller metadata or alias mutations
+  cannot extend expiry or change stored contents.
+- Allocate collision-free remote result names without losing values, using a
+  monotonic fallback cursor to avoid repeated scans of occupied suffixes.
+- Add `pnpm test:consumer`: install the actual tarball in a clean consumer and
+  exercise retrieval from files, local presentation, Lua, signed/tampered receipts,
+  guard denial, process tools, sanitized failure, cancellation, and termination.
+  Run it in CI and the release gate.
+
+These changes strengthen an evaluation reference implementation. External security
+review, deployment isolation/qualification, and complete interoperability remain
+release gates; timing/control-flow disclosure is explicitly not eliminated.
+
 ## [0.1.0-alpha.0]
 
 First pre-release of the Instruct protocol drafts and TypeScript reference

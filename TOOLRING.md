@@ -138,6 +138,15 @@ path. Toolring returns the resulting values without defining their disclosure
 policy. An Instruct host independently derives their guarded and remote-safe
 representations.
 
+The current TypeScript reference profile supports root terminals only. Preflight
+MUST reject a terminal reachable from a loop body before returning to that loop,
+or from a parallel branch before its join, including through nested structures
+or recovery edges (`NESTED_TERMINAL`). Compensation paths MUST NOT reach terminals
+(`INVALID_COMPENSATION`). A terminal after the enclosing boundaries, including a
+root recovery terminal, remains valid. Nested results MUST NOT be silently
+discarded or emit `workflow.completed`; profiles supporting path-local terminals
+must instead define how their results are preserved and bound.
+
 ## 6 Failure handling
 
 Toolring distinguishes an **attempt failure** from an unhandled **path failure**.
@@ -165,6 +174,13 @@ Compensation is not rollback. It is a separate effectful operation that MAY fail
 A Toolring executor MUST preserve the outcome of both the original operation and
 the compensation attempt. An integration MAY additionally require separate
 authorization. Compensation MUST NOT erase evidence that an effect occurred.
+
+In the reference receipt, `observedEffects` conservatively includes the known
+declared effects of every tool whose execution was entered, even if it later
+failed, timed out, or returned invalid output. It is an attempted-effect envelope,
+not proof that each declared effect occurred, an exact effect log, or proof of
+rollback. Input validation rejection before entry contributes no attempted effect.
+Compensation and recovery consume the same remaining run budgets as normal flow.
 
 If all configured handling is exhausted, failure propagates to the enclosing path.
 An unhandled failure at the root produces a failed run.

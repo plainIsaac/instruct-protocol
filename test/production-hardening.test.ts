@@ -40,7 +40,8 @@ describe("production authority and budget boundaries", () => {
     await expect(executeProgram({
       language: "lua", source: "function main(ctx) return 'expanded' end",
       budget: { maxOutputBytes: 10_000 }
-    }, { inputs: {}, grant: { ...grant, budget: { ...budget, maxOutputBytes: 2 } } }))
+    // Isolate output enforcement from VM startup time and instruction metering.
+    }, { inputs: {}, grant: { ...grant, budget: { ...budget, maxDurationMs: 2_000, maxInstructions: 10_000, maxOutputBytes: 2 } } }))
       .rejects.toThrow("OUTPUT_BUDGET_EXCEEDED");
   });
 

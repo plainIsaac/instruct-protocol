@@ -171,7 +171,7 @@ describe("Lua tool API", () => {
   it("passes known handles back to tools and rejects forged ones", async () => {
     const store = new HandleStore("scope");
     const tools = new ToolRegistry()
-      .register({ name: "open", capability: "tool:vault", effects: [], async execute() { return store.create(guarded(SECRET, defaultGuard("scope", "secret")), "doc"); } })
+      .register({ name: "open", capability: "tool:vault", effects: [], async execute() { return store.create(guarded(SECRET, { ...defaultGuard("scope", "secret"), permittedOperations: ["tool:vault"] }), "doc"); } })
       .register({ name: "measure", capability: "tool:vault", effects: [], async execute(args) { return guarded(String(store.resolve(args.doc!.handle!).value).length, defaultGuard("scope")); } });
     const ok = await run(code("function main(ctx) local h = instruct.tool('open', {}) return instruct.tool('measure', { doc = h }) end", { capabilities: ["code:execute", "tool:vault"] }), { tools, grant });
     expect(ok.localResult.result?.value).toBe(SECRET.length);

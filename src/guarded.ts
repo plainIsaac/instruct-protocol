@@ -6,7 +6,7 @@ const rank: Record<Sensitivity, number> = { public: 0, internal: 1, confidential
 const unique = <T>(xs: T[]) => [...new Set(xs)];
 
 export function defaultGuard(scope: string, sensitivity: Sensitivity = "public"): Guard {
-  return { sensitivity, disclosures: [], provenance: [], sourceHandles: [], transformations: [], permittedOperations: [], permittedDestinations: ["local"], scope, correlation: "single-use" };
+  return { sensitivity, disclosures: [], provenance: [], sourceHandles: [], transformations: [], permittedOperations: sensitivity === "public" ? ["*"] : [], permittedDestinations: ["local"], scope, correlation: "single-use" };
 }
 
 export function guarded<T>(value: T, guard: Guard): GuardedValue<T> { return { kind: "guarded", value, guard: structuredClone(guard) }; }
@@ -15,16 +15,25 @@ export function mergeGuards(values: GuardedValue[], transform?: Omit<Transformat
   if (!values.length) return defaultGuard("derived");
   const guards = values.map(v => v.guard);
   const sensitivity = guards.reduce((a, b) => rank[a] >= rank[b.sensitivity] ? a : b.sensitivity, "public" as Sensitivity);
-  const destinations = guards.map(g => g.permittedDestinations).reduce((a, b) => a.filter(x => b.includes(x)));
+  const destinations = guards.map(g => g.permittedDestinations).reduce((a, b) => intersectPermissions(a, b, destinationCovers));
   const provenance = unique(guards.flatMap(g => g.provenance));
   const record = transform ? [{ ...transform, inputProvenance: provenance, at: new Date().toISOString() }] : [];
   return {
     sensitivity, disclosures: unique(guards.flatMap(g => g.disclosures)), provenance,
     sourceHandles: unique(guards.flatMap(g => g.sourceHandles)), transformations: [...guards.flatMap(g => g.transformations), ...record],
-    permittedOperations: guards.map(g => g.permittedOperations).reduce((a, b) => a.filter(x => b.includes(x))),
+    permittedOperations: guards.map(g => g.permittedOperations).reduce((a, b) => intersectPermissions(a, b, (grant, required) => grant === "*" || grant === required)),
     permittedDestinations: destinations, scope: guards[0]!.scope,
-    expiresAt: earliest(guards.map(g => g.expiresAt)), correlation: "single-use"
+    expiresAt: earliest(values.flatMap(value => [value.guard.expiresAt, value.handle?.expiresAt])), correlation: "single-use"
   };
+}
+
+/** Pairwise intersection retains the narrower permission, never an empty-set fallback. */
+function intersectPermissions<T extends string>(left: T[], right: T[], covers: (grant: T, required: T) => boolean): T[] {
+  return unique(left.flatMap(a => right.flatMap(b => covers(a, b) ? [b] : covers(b, a) ? [a] : [])));
+}
+
+function destinationCovers(grant: Destination, required: Destination): boolean {
+  return grant === required || ((grant === "local" || grant === "tool:*") && required.startsWith("tool:"));
 }
 
 // Timestamps may use different offsets, so compare instants rather than strings.
@@ -37,8 +46,9 @@ export class HandleStore {
   constructor(readonly scope: string) {}
   create(value: GuardedValue, type = "unknown"): GuardedValue {
     const id = `h_${randomUUID()}`; const handle: PrivateHandle = { id, type, scope: this.scope, expiresAt: value.guard.expiresAt };
-    this.#values.set(id, { handle, value });
-    return { kind: "guarded", handle, guard: { ...value.guard, sourceHandles: unique([...value.guard.sourceHandles, id]), scope: this.scope } };
+    // Neither creator-owned values nor returned descriptors may alias authority.
+    this.#values.set(id, structuredClone({ handle, value }));
+    return structuredClone({ kind: "guarded", handle, guard: { ...value.guard, sourceHandles: unique([...value.guard.sourceHandles, id]), scope: this.scope } });
   }
   resolve(handle: PrivateHandle): GuardedValue {
     if (handle.scope !== this.scope) throw new ProtocolError("HANDLE_SCOPE_VIOLATION");
@@ -46,7 +56,7 @@ export class HandleStore {
     if (stored.handle.scope !== handle.scope || stored.handle.type !== handle.type) throw new ProtocolError("HANDLE_METADATA_MISMATCH");
     if (stored.handle.expiresAt && Date.parse(stored.handle.expiresAt) <= Date.now()) { this.#values.delete(handle.id); throw new ProtocolError("HANDLE_EXPIRED"); }
     if (stored.value.guard.correlation === "single-use") this.#values.delete(handle.id);
-    return stored.value;
+    return structuredClone(stored.value);
   }
 }
 
@@ -64,5 +74,5 @@ export function remoteRepresentation(value: GuardedValue, representation: Repres
 }
 
 export function assertDestination(value: GuardedValue, destination: Destination): void {
-  if (!value.guard.permittedDestinations.includes(destination)) throw new ProtocolError(`DESTINATION_DENIED:${destination}`);
+  if (!value.guard.permittedDestinations.some(grant => destinationCovers(grant, destination))) throw new ProtocolError(`DESTINATION_DENIED:${destination}`);
 }

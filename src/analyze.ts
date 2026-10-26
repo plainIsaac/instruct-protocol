@@ -34,6 +34,20 @@ export function analyzeWorkflow(graph: CanonicalWorkflow, grant: Grant, tools: T
     if (!effectAllowed(effect, graph.declaredEffects)) issues.push(error("UNDECLARED_EFFECT", effectKey(effect)));
     if (!effectAllowed(effect, grant.effects)) issues.push(error("EFFECT_DENIED", effectKey(effect)));
   }
+  // This profile has root terminals only: nested results would otherwise be discarded.
+  // Stop traversal at the enclosing boundary, including recovery edges and nested structures.
+  for (const node of Object.values(graph.nodes)) {
+    const paths = node.kind === "loop" ? [{ start: node.body, stop: node.id }] : node.kind === "parallel" ? node.branches.map(start => ({ start, stop: node.join })) : [];
+    for (const { start, stop } of paths) {
+      const pending = [start]; const seen = new Set<string>();
+      while (pending.length) {
+        const id = pending.pop()!; if (id === stop || seen.has(id)) continue; seen.add(id);
+        const child = graph.nodes[id]; if (!child) continue;
+        if (child.kind === "terminal") { issues.push(error("NESTED_TERMINAL", "Terminal before a loop boundary or parallel join is unsupported", child.id)); break; }
+        pending.push(...targets(child));
+      }
+    }
+  }
   // Compensation must not re-enter normal flow (where it could repeat effects) or end the workflow.
   const normal = walk(graph.entry, graph, new Set(), false);
   for (const node of Object.values(graph.nodes)) if (node.retry?.compensate) {

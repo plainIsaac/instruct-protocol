@@ -1,6 +1,6 @@
 import { ProtocolError } from "./errors.js";
 import { createHash } from "node:crypto";
-import { defaultGuard, guarded, HandleStore } from "./guarded.js";
+import { defaultGuard, guarded, HandleStore, mergeGuards } from "./guarded.js";
 import { ToolRegistry, type ToolDefinition } from "./tools.js";
 import type { Effect, GuardedValue, PrivateHandle } from "./types.js";
 
@@ -79,12 +79,16 @@ export class ConfidentialRetrievalService {
       aliases: ["find confidential file", "semantic file search"],
       capability: "tool:confidential.search",
       effects: searchEffect,
+      operations: ["semantic-search"],
+      outputTransform: { name: "trusted-scoped-search", guarantees: ["Only an opaque session-scoped search handle is returned; documents, paths, scores and vectors remain local", "The handle authorizes only present-best-match"] },
       inputSchema: {
         type: "object", required: ["description"], additionalProperties: false,
         properties: { description: { type: "string" } }
       },
-      execute: async args => {
+      execute: async (args, context) => {
         const description = requireString(args.description, "DESCRIPTION_REQUIRED");
+        // Persist dependency deadlines before the handle leaves trusted storage.
+        const expiresAt = mergeGuards([args.description!, ...(context.guardContributors ?? [])]).expiresAt;
         const intent = await this.options.intentInterpreter.interpret(description);
         const query = [intent.terms.join(" "), intent.fileType ?? ""].join(" ").trim();
         const vector = await this.options.embedder.embed(query);
@@ -98,6 +102,7 @@ export class ConfidentialRetrievalService {
           ...defaultGuard(this.options.scope, "secret"),
           provenance: ["trusted:semantic-index"],
           permittedOperations: ["present-best-match"],
+          expiresAt,
           correlation: "session"
         });
         return this.#handles.create(state, "confidential-search");
@@ -111,6 +116,8 @@ export class ConfidentialRetrievalService {
       aliases: ["open best confidential match"],
       capability: "tool:confidential.present",
       effects: presentEffect,
+      operations: ["present-best-match"],
+      outputTransform: { name: "trusted-local-presentation-status", guarantees: ["Only the fixed public presentation status is returned after local presentation; no document data is returned"] },
       execute: async args => {
         const handle = requireHandle(args.search, "confidential-search");
         const state = this.#handles.resolve(handle).value as SearchState;

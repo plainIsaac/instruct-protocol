@@ -85,9 +85,16 @@ describe("sandboxed programs", () => {
 
   it("runs a Lua capsule independently from orchestration", async () => {
     const { tools } = fixtures();
-    const result = await run({ version: "0.1", id: "code-1", kind: "code", intent: "double locally", capabilities: ["code:execute"], effects: [], disclosureBudget: { maxRemoteBytes: 100, allowedLabels: [] }, inputs: { number: guarded(21, { ...defaultGuard("code"), permittedDestinations: ["local", "remote"] }) }, program: { language: "lua", source: "function main(ctx) return ctx.inputs.number * 2 end" } }, { tools, grant });
+    const result = await run({ version: "0.1", id: "code-1", kind: "code", intent: "double locally", capabilities: ["code:execute"], effects: [], disclosureBudget: { maxRemoteBytes: 100, allowedLabels: [] }, inputs: { number: guarded(21, { ...defaultGuard("code"), permittedDestinations: ["local", "remote"] }) }, program: { language: "lua", source: "function main(ctx) return ctx.inputs.number * 2 end" } }, { tools, grant: { ...grant, disclosureDestinations: ["local", "remote"] } });
     expect(result.localResult.result?.value).toBe(42);
     expect(result.receipt.remoteResult).toEqual({ result: 42 });
+  });
+
+  it("withholds a remote-permitted value when the grant does not permit remote disclosure", async () => {
+    const { tools } = fixtures();
+    const result = await run({ version: "0.1", id: "code-2", kind: "code", intent: "local only", capabilities: ["code:execute"], effects: [], disclosureBudget: { maxRemoteBytes: 100, allowedLabels: [] }, inputs: { number: guarded(21, { ...defaultGuard("code"), permittedDestinations: ["local", "remote"] }) }, program: { language: "lua", source: "function main(ctx) return ctx.inputs.number * 2 end" } }, { tools, grant });
+    expect(result.localResult.result?.value).toBe(42);
+    expect(result.receipt.remoteResult).toEqual({ result: { withheld: true, type: "number" } });
   });
 });
 

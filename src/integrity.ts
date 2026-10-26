@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import { sign, verify, type KeyObject } from "node:crypto";
 import type { ReceiptSignatureVerifier, ReceiptSigner } from "./receipt.js";
 
@@ -7,7 +8,7 @@ export const ED25519_RECEIPT_PROFILE = "instruct-reference-ed25519-v1";
 export class Ed25519ReceiptSigner implements ReceiptSigner {
   readonly profile = ED25519_RECEIPT_PROFILE;
   constructor(readonly keyId: string, private readonly privateKey: KeyObject) {
-    if (!keyId || privateKey.type !== "private" || privateKey.asymmetricKeyType !== "ed25519") throw new Error("INVALID_ED25519_SIGNER");
+    if (!keyId || privateKey.type !== "private" || privateKey.asymmetricKeyType !== "ed25519") throw new ProtocolError("INVALID_ED25519_SIGNER");
   }
   sign(digest: Uint8Array): Uint8Array { return sign(null, digest, this.privateKey); }
 }

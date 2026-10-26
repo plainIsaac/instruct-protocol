@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import { timingSafeEqual } from "node:crypto";
 import type { Effect, ExecutionEvent, ExecutionMetrics, ExecutionReceipt, ReceiptIntegrity } from "./types.js";
 import { referenceDigest } from "./canonical.js";
@@ -26,10 +27,10 @@ export interface ReceiptSignatureVerifier {
 }
 
 export async function signReceipt(receipt: ExecutionReceipt, signer: ReceiptSigner): Promise<ExecutionReceipt> {
-  if (!verifyReceipt(receipt)) throw new Error("INVALID_RECEIPT_DIGEST");
-  if (!signer.profile || !signer.keyId) throw new Error("INVALID_RECEIPT_SIGNER");
+  if (!verifyReceipt(receipt)) throw new ProtocolError("INVALID_RECEIPT_DIGEST");
+  if (!signer.profile || !signer.keyId) throw new ProtocolError("INVALID_RECEIPT_SIGNER");
   const signature = await signer.sign(Buffer.from(receipt.receiptHash, "hex"));
-  if (!(signature instanceof Uint8Array) || signature.byteLength === 0) throw new Error("INVALID_RECEIPT_SIGNATURE");
+  if (!(signature instanceof Uint8Array) || signature.byteLength === 0) throw new ProtocolError("INVALID_RECEIPT_SIGNATURE");
   const integrity: ReceiptIntegrity = { profile: signer.profile, keyId: signer.keyId, signature: Buffer.from(signature).toString("base64url") };
   return { ...receipt, integrity };
 }

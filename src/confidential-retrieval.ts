@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import { createHash } from "node:crypto";
 import { defaultGuard, guarded, HandleStore } from "./guarded.js";
 import { ToolRegistry, type ToolDefinition } from "./tools.js";
@@ -57,7 +58,7 @@ export class ConfidentialRetrievalService {
   private constructor(readonly options: ConfidentialRetrievalOptions) {
     this.#handles = new HandleStore(options.scope);
     for (const document of options.documents) {
-      if (this.#byId.has(document.id)) throw new Error(`DUPLICATE_DOCUMENT_ID:${document.id}`);
+      if (this.#byId.has(document.id)) throw new ProtocolError(`DUPLICATE_DOCUMENT_ID:${document.id}`);
       this.#byId.set(document.id, document);
     }
     this.tools.register(this.searchTool()).register(this.presentTool());
@@ -114,7 +115,7 @@ export class ConfidentialRetrievalService {
         const handle = requireHandle(args.search, "confidential-search");
         const state = this.#handles.resolve(handle).value as SearchState;
         const document = state.candidates[0] ? this.#byId.get(state.candidates[0]) : undefined;
-        if (!document) throw new Error("NO_MATCH");
+        if (!document) throw new ProtocolError("NO_MATCH");
         await this.options.present({ documentId: document.id, path: document.path });
         return guarded({ status: "presented_to_authorized_user" }, {
           ...defaultGuard(this.options.scope, "public"),
@@ -130,7 +131,7 @@ export class ConfidentialRetrievalService {
 /** A deterministic offline stand-in for a pinned, trusted embedding model. */
 export class HashingEmbedder implements TrustedEmbedder {
   constructor(readonly dimensions = 256) {
-    if (!Number.isInteger(dimensions) || dimensions < 8) throw new Error("INVALID_EMBEDDING_DIMENSIONS");
+    if (!Number.isInteger(dimensions) || dimensions < 8) throw new ProtocolError("INVALID_EMBEDDING_DIMENSIONS");
   }
   embed(text: string): readonly number[] {
     const vector = Array<number>(this.dimensions).fill(0);
@@ -167,10 +168,10 @@ function cosine(left: readonly number[], right: readonly number[]): number {
   return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
 function requireString(value: GuardedValue | undefined, code: string): string {
-  if (typeof value?.value !== "string" || !value.value.trim()) throw new Error(code);
+  if (typeof value?.value !== "string" || !value.value.trim()) throw new ProtocolError(code);
   return value.value;
 }
 function requireHandle(value: GuardedValue | undefined, type: string): PrivateHandle {
-  if (!value?.handle || value.handle.type !== type) throw new Error("INVALID_SEARCH_HANDLE");
+  if (!value?.handle || value.handle.type !== type) throw new ProtocolError("INVALID_SEARCH_HANDLE");
   return value.handle;
 }

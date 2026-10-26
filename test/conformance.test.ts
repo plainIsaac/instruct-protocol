@@ -91,7 +91,7 @@ describe("capsule boundary validation", () => {
 
   it("rejects an invalid value before notifying observers", async () => {
     let observed = false;
-    const observer = { onEvent() { observed = true; } };
+    const observer = { emit() { observed = true; } };
     await expect(run(null as unknown as CodeCapsule, { tools: new ToolRegistry(), grant, observer }))
       .rejects.toThrow("INVALID_CAPSULE");
     expect(observed).toBe(false);

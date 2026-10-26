@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import type { CanonicalWorkflow, CodeProgram, ConditionExpression, Effect, RetryPolicy, ValueExpression, WorkflowNode, WorkflowProposal } from "./types.js";
 import type { ToolRegistry } from "./tools.js";
 import { canonicalJson, referenceDigest } from "./canonical.js";
@@ -24,18 +25,18 @@ export class DeterministicIntentResolver implements IntentResolver {
 
 export async function normalizeWorkflow(proposal: WorkflowProposal, context: NormalizationContext): Promise<NormalizationResult> {
   const rawNodes = proposal.nodes ?? proposal.steps;
-  if (!Array.isArray(rawNodes) || rawNodes.length === 0) throw new Error("WORKFLOW_HAS_NO_NODES");
+  if (!Array.isArray(rawNodes) || rawNodes.length === 0) throw new ProtocolError("WORKFLOW_HAS_NO_NODES");
   const resolver = context.resolver ?? new DeterministicIntentResolver(context.tools);
   const decisions: NormalizationDecision[] = []; const nodes: Record<string, WorkflowNode> = {};
   for (let index = 0; index < rawNodes.length; index++) {
-    const item = rawNodes[index]; if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`INVALID_NODE:${index}`);
-    const raw = item as Record<string, unknown>; const nodeId = id(raw, index); if (nodes[nodeId]) throw new Error(`DUPLICATE_NODE:${nodeId}`);
+    const item = rawNodes[index]; if (!item || typeof item !== "object" || Array.isArray(item)) throw new ProtocolError(`INVALID_NODE:${index}`);
+    const raw = item as Record<string, unknown>; const nodeId = id(raw, index); if (nodes[nodeId]) throw new ProtocolError(`DUPLICATE_NODE:${nodeId}`);
     const kind = String(raw.kind ?? raw.type ?? (raw.tool ? "tool" : raw.program ? "code" : raw.result ? "terminal" : "tool")).toLowerCase();
     const next = raw.next == null ? undefined : String(raw.next);
     const retry = normalizeRetry(raw.retry);
     if (kind === "tool" || kind === "call") {
       const requested = String(raw.tool ?? raw.action ?? ""); const tool = await resolver.resolveTool(requested, context.tools.list().map(t => t.name));
-      if (!tool) throw new Error(`UNKNOWN_TOOL:${requested}`);
+      if (!tool) throw new ProtocolError(`UNKNOWN_TOOL:${requested}`);
       if (tool !== requested) decisions.push({ path: `${nodeId}.tool`, from: requested, to: tool, reason: "local tool-name resolution" });
       const normalizedArgs = await resolver.normalizeArguments(tool, argsOf(raw));
       if (canonicalJson(normalizedArgs) !== canonicalJson(argsOf(raw))) decisions.push({ path: `${nodeId}.arguments`, from: argsOf(raw), to: normalizedArgs, reason: "local argument normalization" });
@@ -54,7 +55,7 @@ export async function normalizeWorkflow(proposal: WorkflowProposal, context: Nor
       nodes[nodeId] = { id: nodeId, kind: "join", next: String(raw.next) };
     } else if (kind === "terminal" || kind === "return") {
       nodes[nodeId] = { id: nodeId, kind: "terminal", result: (raw.result ?? raw.value ?? {}) as Record<string, ValueExpression> };
-    } else throw new Error(`UNKNOWN_NODE_KIND:${kind}`);
+    } else throw new ProtocolError(`UNKNOWN_NODE_KIND:${kind}`);
   }
   const entry = proposal.entry ?? Object.keys(nodes)[0]!;
   const graph: CanonicalWorkflow = { version: "0.1", entry, nodes, declaredCapabilities: [...context.capabilities], declaredEffects: structuredClone(context.effects) };
@@ -63,12 +64,12 @@ export async function normalizeWorkflow(proposal: WorkflowProposal, context: Nor
 
 function normalizeRetry(raw: unknown): RetryPolicy | undefined {
   if (raw == null) return undefined; if (typeof raw === "number") return { attempts: raw };
-  if (typeof raw !== "object") throw new Error("INVALID_RETRY_POLICY"); const x = raw as Record<string, unknown>;
+  if (typeof raw !== "object") throw new ProtocolError("INVALID_RETRY_POLICY"); const x = raw as Record<string, unknown>;
   return { attempts: Number(x.attempts ?? x.count ?? 1), recover: x.recover == null ? undefined : String(x.recover), compensate: x.compensate == null ? undefined : String(x.compensate) };
 }
 function normalizeCondition(raw: unknown): ConditionExpression {
   if (typeof raw === "string") return { left: { $ref: raw.replace(/^\$?/, "") }, op: "truthy" };
-  if (!raw || typeof raw !== "object") throw new Error("INVALID_CONDITION"); const x = raw as Record<string, unknown>;
+  if (!raw || typeof raw !== "object") throw new ProtocolError("INVALID_CONDITION"); const x = raw as Record<string, unknown>;
   return { left: x.left as ValueExpression, op: String(x.op ?? "truthy") as ConditionExpression["op"], right: x.right as ValueExpression };
 }
 function asStrings(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : value == null ? [] : [String(value)]; }

@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import { createHash } from "node:crypto";
 
 /**
@@ -16,11 +17,11 @@ function encode(value: unknown, seen: Set<object>, path: string): string {
   if (value === null) return "null";
   if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error(`CANONICAL_NON_FINITE_NUMBER:${path}`);
+    if (!Number.isFinite(value)) throw new ProtocolError(`CANONICAL_NON_FINITE_NUMBER:${path}`);
     return Object.is(value, -0) ? "0" : JSON.stringify(value);
   }
-  if (typeof value !== "object") throw new Error(`CANONICAL_UNSUPPORTED_VALUE:${path}`);
-  if (seen.has(value)) throw new Error(`CANONICAL_CYCLE:${path}`);
+  if (typeof value !== "object") throw new ProtocolError(`CANONICAL_UNSUPPORTED_VALUE:${path}`);
+  if (seen.has(value)) throw new ProtocolError(`CANONICAL_CYCLE:${path}`);
   seen.add(value);
   try {
     if (Array.isArray(value)) {
@@ -28,7 +29,7 @@ function encode(value: unknown, seen: Set<object>, path: string): string {
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new Error(`CANONICAL_UNSUPPORTED_OBJECT:${path}`);
+      throw new ProtocolError(`CANONICAL_UNSUPPORTED_OBJECT:${path}`);
     }
     const object = value as Record<string, unknown>;
     const entries = Object.keys(object).filter(key => object[key] !== undefined).sort(compareCodePoints).map(key => {

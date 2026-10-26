@@ -1,3 +1,4 @@
+import { ProtocolError } from "./errors.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { Destination, Guard, GuardedValue, JsonValue, PrivateHandle, Representation, Sensitivity, TransformationRecord } from "./types.js";
 
@@ -22,8 +23,13 @@ export function mergeGuards(values: GuardedValue[], transform?: Omit<Transformat
     sourceHandles: unique(guards.flatMap(g => g.sourceHandles)), transformations: [...guards.flatMap(g => g.transformations), ...record],
     permittedOperations: guards.map(g => g.permittedOperations).reduce((a, b) => a.filter(x => b.includes(x))),
     permittedDestinations: destinations, scope: guards[0]!.scope,
-    expiresAt: guards.map(g => g.expiresAt).filter(Boolean).sort()[0], correlation: "single-use"
+    expiresAt: earliest(guards.map(g => g.expiresAt)), correlation: "single-use"
   };
+}
+
+// Timestamps may use different offsets, so compare instants rather than strings.
+function earliest(values: (string | undefined)[]): string | undefined {
+  return values.filter((v): v is string => Boolean(v)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
 }
 
 export class HandleStore {
@@ -35,10 +41,10 @@ export class HandleStore {
     return { kind: "guarded", handle, guard: { ...value.guard, sourceHandles: unique([...value.guard.sourceHandles, id]), scope: this.scope } };
   }
   resolve(handle: PrivateHandle): GuardedValue {
-    if (handle.scope !== this.scope) throw new Error("HANDLE_SCOPE_VIOLATION");
-    const stored = this.#values.get(handle.id); if (!stored) throw new Error("HANDLE_NOT_FOUND");
-    if (stored.handle.scope !== handle.scope || stored.handle.type !== handle.type) throw new Error("HANDLE_METADATA_MISMATCH");
-    if (stored.handle.expiresAt && Date.parse(stored.handle.expiresAt) <= Date.now()) { this.#values.delete(handle.id); throw new Error("HANDLE_EXPIRED"); }
+    if (handle.scope !== this.scope) throw new ProtocolError("HANDLE_SCOPE_VIOLATION");
+    const stored = this.#values.get(handle.id); if (!stored) throw new ProtocolError("HANDLE_NOT_FOUND");
+    if (stored.handle.scope !== handle.scope || stored.handle.type !== handle.type) throw new ProtocolError("HANDLE_METADATA_MISMATCH");
+    if (stored.handle.expiresAt && Date.parse(stored.handle.expiresAt) <= Date.now()) { this.#values.delete(handle.id); throw new ProtocolError("HANDLE_EXPIRED"); }
     if (stored.value.guard.correlation === "single-use") this.#values.delete(handle.id);
     return stored.value;
   }
@@ -46,7 +52,7 @@ export class HandleStore {
 
 export function remoteRepresentation(value: GuardedValue, representation: Representation): JsonValue {
   if (!value.guard.permittedDestinations.includes("remote")) {
-    if (!value.handle) throw new Error("REMOTE_DISCLOSURE_DENIED");
+    if (!value.handle) throw new ProtocolError("REMOTE_DISCLOSURE_DENIED");
     return { $handle: value.handle.id, type: value.handle.type };
   }
   if (representation === "value" && value.guard.sensitivity === "public") return value.value as JsonValue;
@@ -54,9 +60,9 @@ export function remoteRepresentation(value: GuardedValue, representation: Repres
   if (representation === "pseudonym") return `p_${createHash("sha256").update(`${value.guard.scope}:${basis}`).digest("hex").slice(0, 12)}`;
   if (representation === "summary") return { type: value.handle?.type ?? typeof value.value, sensitivity: value.guard.sensitivity };
   if (value.handle) return { $handle: value.handle.id, type: value.handle.type };
-  throw new Error("PRIVATE_VALUE_REQUIRES_HANDLE");
+  throw new ProtocolError("PRIVATE_VALUE_REQUIRES_HANDLE");
 }
 
 export function assertDestination(value: GuardedValue, destination: Destination): void {
-  if (!value.guard.permittedDestinations.includes(destination)) throw new Error(`DESTINATION_DENIED:${destination}`);
+  if (!value.guard.permittedDestinations.includes(destination)) throw new ProtocolError(`DESTINATION_DENIED:${destination}`);
 }

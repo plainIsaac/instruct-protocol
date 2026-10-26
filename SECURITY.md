@@ -10,6 +10,16 @@ but the host process and every registered tool remain trusted computing base.
 - guarded-value propagation and fail-closed remote representation;
 - scoped, expiring opaque handles;
 - finite workflow, Lua, tool-call, output, and call-depth budgets;
+- Lua executed in a dedicated worker thread that is terminated at its deadline or on
+  cancellation, with a metering hook that `pcall` cannot absorb;
+- runtime removal of ambient, clock, randomness, debug, and coroutine facilities
+  from Lua, independent of the advisory static analysis;
+- authorization of Lua tool calls against declared and granted capabilities and
+  effects, with conservative guard propagation through Lua;
+- stable error codes only in events and receipts; tool, resolver, and Lua error
+  text never crosses the trust boundary;
+- remote disclosure only when the guard, the grant's disclosure destinations, the
+  disclosure labels, guard expiry, and byte budgets all permit it;
 - allowlisted observer/event details and deterministic receipt digests;
 - deterministic SHA-256 digests in the TypeScript reference profile;
 - security-relevant structural validation of untrusted capsules, guards, effects,
@@ -25,6 +35,17 @@ The reference receipt digest detects accidental corruption and supports determin
 chaining. Production mode additionally requires an independently versioned receipt
 signer. The included Ed25519 adapter consumes a deployment-provided key and does not
 load or store signing material itself.
+
+## Known limitations
+
+- A hostile program or workflow can still signal a few bits per run to the model:
+  completed versus failed, which allowlisted error code it triggers, the type in a
+  withheld marker, and which output budget withheld a result. Deployments that
+  cannot accept this should limit how many runs a model may request.
+- Lua worker startup, bounded at 5 seconds, is not counted against the program's
+  time budget, so a code node can overrun its parent's deadline by that startup time.
+- In-process tools that ignore cancellation keep running after a timeout; only
+  process-isolated tools are terminated.
 
 ## Required deployment controls
 
@@ -74,5 +95,17 @@ The project must not claim production readiness until all of these are complete:
 - a supported isolated deployment profile and key-management profile exist; and
 - compatibility, vulnerability response, and security-update policies are published.
 
-Security reports should avoid public disclosure until a private reporting channel
-and response policy are published.
+## Supported versions
+
+Only the latest pre-release receives fixes. Pre-releases (`0.x.y-alpha`, `-beta`,
+`-rc`) carry no compatibility or support guarantee.
+
+## Reporting a vulnerability
+
+Do not open a public issue for a suspected vulnerability. Report it privately
+through GitHub's "Report a vulnerability" form on the repository's Security tab
+(https://github.com/plainIsaac/instruct-protocol/security/advisories/new).
+Include the affected version or commit, a minimal reproduction, and the impact
+you observed. Reports are handled on a best-effort basis during the pre-release
+period; fixes ship in the next pre-release and are disclosed in a GitHub security
+advisory.

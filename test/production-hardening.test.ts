@@ -31,8 +31,9 @@ function codeCapsule(): CodeCapsule {
 describe("production authority and budget boundaries", () => {
   it("requires code capsules to declare code execution authority", async () => {
     const capsule = codeCapsule(); capsule.capabilities = [];
-    await expect(run(capsule, { tools: new ToolRegistry(), grant }))
-      .rejects.toThrow("CAPSULE_CODE_CAPABILITY_UNDECLARED");
+    const result = await run(capsule, { tools: new ToolRegistry(), grant });
+    expect(result.receipt.status).toBe("denied");
+    expect(result.receipt.events.find(event => event.type === "run.denied")?.detail.code).toBe("CAPSULE_CODE_CAPABILITY_UNDECLARED");
   });
 
   it("does not allow a child program to expand its parent output budget", async () => {

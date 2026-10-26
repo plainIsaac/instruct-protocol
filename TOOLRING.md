@@ -1,5 +1,7 @@
 # Toolring Protocol Specification
 
+One ring to tool them all.
+
 Status: early draft. This document defines Toolring independently from Instruct.
 It is not a claim of conformance by the reference implementation.
 

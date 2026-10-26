@@ -47,9 +47,11 @@ describe("reference production profile", () => {
       capabilities: ["tool:effect"], effects: grant.effects, disclosureBudget: { maxRemoteBytes: 100, allowedLabels: [] }, inputs: {},
       workflow: { steps: [{ id: "effect", tool: "fixture.effect" }] }
     };
-    const { signer } = signing(); const { observer } = audit();
-    await expect(run(capsule, { tools, grant, production: { receiptSigner: signer, auditObserver: observer } }))
-      .rejects.toThrow("PRODUCTION_TOOL_NOT_ISOLATED");
+    const { signer } = signing(); const { observer, alerts } = audit();
+    const result = await run(capsule, { tools, grant, production: { receiptSigner: signer, auditObserver: observer } });
+    expect(result.receipt.status).toBe("denied");
+    expect(result.receipt.events.find(event => event.type === "run.denied")?.detail.code).toBe("PRODUCTION_TOOL_NOT_ISOLATED");
+    expect(alerts).toContain("EXECUTION_DENIED");
   });
 
   it("runs an effectful tool behind a terminable process boundary", async () => {
@@ -70,6 +72,29 @@ describe("reference production profile", () => {
     const result = await run(capsule, { tools, grant, production: { receiptSigner: signer, auditObserver: observer } });
     expect(result.receipt.status).toBe("completed");
     expect(await verifyReceiptSignature(result.receipt, verifier)).toBe(true);
+  });
+
+  it.each([true, false, undefined])("preserves process-tool retry safety (idempotent=%s)", async (idempotent) => {
+    const effects = [{ type: "send", resource: "fixture", reversible: false }];
+    const tool = processTool({
+      name: "fixture.retry", capability: "tool:effect", effects, idempotent,
+      command: process.execPath, args: ["-e", "process.exit(1)"]
+    });
+    const tools = new ToolRegistry().register(tool);
+    const capsule: OrchestrationCapsule = {
+      version: "0.1", id: "retry", kind: "orchestration", intent: "authorized retry",
+      capabilities: ["tool:effect"], effects, disclosureBudget: { maxRemoteBytes: 100, allowedLabels: [] }, inputs: {},
+      workflow: { steps: [{ id: "effect", tool: tool.name, retry: { attempts: 2 } }] }
+    };
+    const { signer } = signing(); const { observer } = audit();
+    const result = await run(capsule, { tools, grant: { ...grant, effects }, production: { receiptSigner: signer, auditObserver: observer } });
+    expect(result.receipt.status).toBe(idempotent ? "failed" : "denied");
+    expect(tool.idempotent).toBe(idempotent);
+    expect(result.receipt.metrics.toolCalls).toBe(idempotent ? 2 : 0);
+    expect(result.receipt.metrics.retries).toBe(idempotent ? 1 : 0);
+    const denial = result.receipt.events.find(event => event.type === "workflow.denied");
+    if (idempotent) expect(denial).toBeUndefined();
+    else expect(denial?.detail.codes).toEqual(["UNSAFE_RETRY"]);
   });
 
   it("forcibly terminates an isolated tool when its signal is aborted", async () => {
